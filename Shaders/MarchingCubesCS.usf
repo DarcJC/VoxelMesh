@@ -1,0 +1,40 @@
+﻿#pragma once
+
+#include "MarchingCubeCommons.ush"
+#include "/Engine/Public/Platform.ush"
+#define PNANOVDB_HLSL
+#define PNANOVDB_ADDRESS_64
+#include "PNanoVDB.ush"
+#undef PNANOVDB_ADDRESS_64
+#undef PNANOVDB_HLSL
+
+cbuffer FieldInfo
+{
+	pnanovdb_buf_t SrcVoxelData;
+	uint DimensionX;
+	uint DimensionY;
+	uint DimensionZ;
+}
+
+RWBuffer<float> VertexPositions;
+RWBuffer<uint> TriangleIndices;
+
+inline uint GetIndexByPoint(int3 Point)
+{
+	// Column major order index
+	return Point.x;
+}
+
+#define WORKGROUP_SIZE_X 64
+#define WORKGROUP_SIZE_Y 1
+#define WORKGROUP_SIZE_Z 1
+
+[numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
+void MainCS(uint3 ThreadID: SV_DispatchThreadID)
+{
+	const uint LinearIndex = GetIndexByPoint(ThreadID);
+}
+
+#undef WORKGROUP_SIZE_X
+#undef WORKGROUP_SIZE_Y
+#undef WORKGROUP_SIZE_Z
