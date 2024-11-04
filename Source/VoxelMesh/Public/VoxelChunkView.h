@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "VoxelRHIUtility.h"
+#include "VoxelVdbCommon.h"
 #include "VoxelChunkView.generated.h"
 
 class FVoxelMarchingCubesUniforms;
@@ -23,15 +24,23 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure)
 	bool IsDirty() const;
 
-public:
-	UPROPERTY(EditAnywhere, Category = "Voxel")
-	uint32 DimensionX = 128;
+	void MarkAsDirty();
+
+	void SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer);
+
+	virtual void Serialize(FArchive& Ar) override;
+
+protected:
+	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
+	uint32 DimensionX;
 	
-	UPROPERTY(EditAnywhere, Category = "Voxel")
-	uint32 DimensionY = 128;
+	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
+	uint32 DimensionY;
 	
-	UPROPERTY(EditAnywhere, Category = "Voxel")
-	uint32 DimensionZ = 128;
+	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
+	uint32 DimensionZ;
+
+	nanovdb::GridHandle<nanovdb::HostBuffer> HostVdbBuffer;
 
 private:
 	bool bRequireRebuild = false;

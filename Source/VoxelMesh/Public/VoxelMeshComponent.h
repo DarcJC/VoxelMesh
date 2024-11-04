@@ -20,4 +20,5 @@ public:
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Voxel)
 	UVoxelChunkView* ChunkView;
+
 };

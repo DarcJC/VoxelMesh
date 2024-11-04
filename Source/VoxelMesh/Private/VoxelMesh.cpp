@@ -24,6 +24,3 @@ void FVoxelMeshModule::ShutdownModule()
 #undef LOCTEXT_NAMESPACE
 	
 IMPLEMENT_MODULE(FVoxelMeshModule, VoxelMesh)
-
-IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FVoxelMarchingCubesUniforms, "FieldInfo")
-IMPLEMENT_GLOBAL_SHADER(FVoxelMarchingCubesCS, "/Plugin/VoxelMesh/MarchingCubesCS.usf", "MainCS", SF_Compute);

@@ -1,0 +1,41 @@
+﻿#pragma once
+
+#define PNANOVDB_HLSL
+#define PNANOVDB_ADDRESS_64
+#include "PNanoVDB.ush"
+#undef PNANOVDB_ADDRESS_64
+#undef PNANOVDB_HLSL
+
+struct FVoxelVdbSampler
+{
+	pnanovdb_buf_t Buffer;
+	pnanovdb_grid_handle_t Grid;
+	pnanovdb_readaccessor_t Accessor;
+	pnanovdb_grid_type_t GridType;
+	pnanovdb_root_handle_t Root;
+};
+
+FVoxelVdbSampler CreateVdbSampler(pnanovdb_buf_t Buf)
+{
+	FVoxelVdbSampler Sampler;
+	Sampler.Buffer = Buf;
+
+	Sampler.Grid.address.byte_offset = 0;
+
+	pnanovdb_buf_t RootBuf = Buf;
+	pnanovdb_tree_handle_t Tree = pnanovdb_grid_get_tree(Sampler.Buffer, Sampler.Grid);
+	Sampler.Root = pnanovdb_tree_get_root(RootBuf, Tree);
+
+	pnanovdb_readaccessor_init(Sampler.Accessor, Sampler.Root);
+
+	Sampler.GridType = pnanovdb_grid_get_grid_type(Sampler.Buffer, Sampler.Grid);
+
+	return Sampler;
+}
+
+float ReadVdbValue(pnanovdb_coord_t IndexSpaceCoord, pnanovdb_buf_t Buf, pnanovdb_grid_type_t GridType, in out pnanovdb_readaccessor_t Accessor)
+{
+	pnanovdb_uint32_t Level = 0;
+	pnanovdb_address_t Address = pnanovdb_readaccessor_get_value_address_and_level(GridType, Buf, Accessor, IndexSpaceCoord, Level);
+	return pnanovdb_root_fp16_read_float(Buf, Address, IndexSpaceCoord, Level);
+}

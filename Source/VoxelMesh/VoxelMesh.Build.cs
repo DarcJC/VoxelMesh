@@ -1,12 +1,13 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
-using System.IO;
 using UnrealBuildTool;
+using System.IO;
 
 public class VoxelMesh : ModuleRules
 {
 
 	private string ShaderDir => Path.GetFullPath( Path.Combine(ModuleDirectory, "..", "..", "Shaders") );
+	private string ThirdPartyDir => Path.GetFullPath( Path.Combine(ModuleDirectory, "..", "..", "ThirdParties") );
 
 	public VoxelMesh(ReadOnlyTargetRules Target) : base(Target)
 	{
@@ -48,6 +49,7 @@ public class VoxelMesh : ModuleRules
 				"RenderCore",
 				"Projects",
 				// ... add private dependencies that you statically link with here ...	
+				"VoxelNanoVDB",
 			}
 			);
 		

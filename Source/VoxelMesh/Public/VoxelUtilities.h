@@ -21,5 +21,5 @@ public:
 
 	/// Create a test nanovdb buffer
 	UFUNCTION(BlueprintCallable)
-	static UVoxelChunkView* CreateSphereChunkView();
+	static UVoxelChunkView* CreateSphereChunkView(UObject* Outer);
 };

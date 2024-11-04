@@ -2,13 +2,13 @@
 
 
 #include "VoxelUtilities.h"
-#define PNANOVDB_C
-#define PNANOVDB_ADDRESS_64
-#include "PNanoVDB.ush"
-#undef PNANOVDB_ADDRESS_64
-#undef PNANOVDB_C
+#include "VoxelChunkView.h"
+#include "VoxelVdbCommon.h"
 
-UVoxelChunkView* UVoxelUtilities::CreateSphereChunkView()
+UVoxelChunkView* UVoxelUtilities::CreateSphereChunkView(UObject* Outer)
 {
-	return nullptr;
+	nanovdb::GridHandle<nanovdb::HostBuffer> NewGrid = nanovdb::tools::createLevelSetSphere();
+	UVoxelChunkView* ChunkView = NewObject<UVoxelChunkView>(Outer);
+	ChunkView->SetVdbBuffer_GameThread(MoveTemp(NewGrid));
+	return ChunkView;
 }

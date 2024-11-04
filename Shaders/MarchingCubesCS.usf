@@ -2,37 +2,154 @@
 
 #include "MarchingCubeCommons.ush"
 #include "/Engine/Public/Platform.ush"
-#define PNANOVDB_HLSL
-#define PNANOVDB_ADDRESS_64
-#include "PNanoVDB.ush"
-#undef PNANOVDB_ADDRESS_64
-#undef PNANOVDB_HLSL
+#include "VoxelVDBCommons.ush"
 
-cbuffer FieldInfo
+uint DimensionX;
+uint DimensionY;
+uint DimensionZ;
+pnanovdb_buf_t SrcVoxelData;
+float SurfaceIsoValue;
+RWBuffer<float> OutVertexBuffer;
+RWBuffer<uint> OutIndexBuffer;
+
+// Atomic counters
+groupshared uint TriangleCounter;
+
+struct FVoxelVdbValueWithGradient
 {
-	pnanovdb_buf_t SrcVoxelData;
-	uint DimensionX;
-	uint DimensionY;
-	uint DimensionZ;
+	float3 Gradient;
+	float Value;
+};
+
+inline uint GetIndexByPoint(uint3 Point)
+{
+	// Row major order index
+	return Point.x + DimensionX * Point.y + (DimensionY * DimensionX * Point.z);
 }
 
-RWBuffer<float> VertexPositions;
-RWBuffer<uint> TriangleIndices;
-
-inline uint GetIndexByPoint(int3 Point)
+float SampleVoxelPoint(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
 {
-	// Column major order index
-	return Point.x;
+	return ReadVdbValue(IndexSpaceCoord, Sampler.Buffer, Sampler.GridType, Sampler.Accessor);
 }
 
-#define WORKGROUP_SIZE_X 64
-#define WORKGROUP_SIZE_Y 1
-#define WORKGROUP_SIZE_Z 1
+FVoxelVdbValueWithGradient SampleVoxelPointWithGradient(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
+{
+	uint3 IndexPrevious = max(IndexSpaceCoord, 1) - 1;
+	uint3 IndexNext = min(IndexSpaceCoord + 1, float3(DimensionX, DimensionY, DimensionZ) - 1);
+	uint3 Index = IndexSpaceCoord;
+
+	FVoxelVdbValueWithGradient Result;
+	Result.Value = SampleVoxelPoint(IndexSpaceCoord, Sampler);
+
+	float ValueNextX = SampleVoxelPoint(float3(IndexNext.x, Index.y, Index.z), Sampler);
+	float ValuePrevX = SampleVoxelPoint(float3(IndexPrevious.x, Index.y, Index.z), Sampler);
+	
+	float ValueNextY = SampleVoxelPoint(float3(Index.x, IndexNext.y, Index.z), Sampler);
+	float ValuePrevY = SampleVoxelPoint(float3(Index.x, IndexPrevious.y, Index.z), Sampler);
+	
+	float ValueNextZ = SampleVoxelPoint(float3(Index.x, Index.y, IndexNext.z), Sampler);
+	float ValuePrevZ = SampleVoxelPoint(float3(Index.x, Index.y, IndexPrevious.z), Sampler);
+
+	Result.Gradient = float3(ValuePrevX - ValueNextX, ValuePrevY - ValueNextY, ValuePrevZ - ValueNextZ);
+
+	return Result;
+}
+
+void WriteTriangle(float3 Pos1, float3 Pos2, float3 Pos3)
+{
+	uint Counter;
+	InterlockedAdd(TriangleCounter, 1U, Counter);
+	GroupMemoryBarrierWithGroupSync();
+
+	uint VertexIndexStart = Counter * 9;
+	
+	OutVertexBuffer[VertexIndexStart + 0] = Pos1.x;
+	OutVertexBuffer[VertexIndexStart + 1] = Pos1.y;
+	OutVertexBuffer[VertexIndexStart + 2] = Pos1.z;
+	OutVertexBuffer[VertexIndexStart + 3] = Pos2.x;
+	OutVertexBuffer[VertexIndexStart + 4] = Pos2.y;
+	OutVertexBuffer[VertexIndexStart + 5] = Pos2.z;
+	OutVertexBuffer[VertexIndexStart + 6] = Pos3.x;
+	OutVertexBuffer[VertexIndexStart + 7] = Pos3.y;
+	OutVertexBuffer[VertexIndexStart + 8] = Pos3.z;
+
+	uint TriangleIndexStart = Counter * 3;
+	OutIndexBuffer[TriangleIndexStart + 0] = TriangleIndexStart + 0;
+	OutIndexBuffer[TriangleIndexStart + 1] = TriangleIndexStart + 1;
+	OutIndexBuffer[TriangleIndexStart + 2] = TriangleIndexStart + 2;
+}
+
+#define WORKGROUP_SIZE_X 4
+#define WORKGROUP_SIZE_Y 4
+#define WORKGROUP_SIZE_Z 4
 
 [numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
 void MainCS(uint3 ThreadID: SV_DispatchThreadID)
 {
+	// Boundary check to prevent dirty result.
+	if (any(ThreadID + 1 >= float3(DimensionX, DimensionY, DimensionZ))) return;
+	
 	const uint LinearIndex = GetIndexByPoint(ThreadID);
+	
+	// Initialize current thread
+	if (LinearIndex == 0U)
+	{
+		TriangleCounter = 0U;
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	// Create Sampler
+	FVoxelVdbSampler Sampler = CreateVdbSampler(SrcVoxelData);
+	
+	// Sample points
+	FVoxelVdbValueWithGradient Samples[8];
+	for (uint i = 0; i < 8; ++i)
+	{
+		Samples[i] = SampleVoxelPointWithGradient(ThreadID + MCCubeVertex(i), Sampler);
+	}
+
+	// Cube setup
+	uint CubeSetup = 0;
+	for (uint i = 0; i < 8; ++i)
+	{
+		CubeSetup |= (Samples[i].Value < SurfaceIsoValue) << i;
+	}
+
+	// There is no triangle will be generated in these two setups
+	if (CubeSetup == 0 || CubeSetup == 255) return;
+
+	// Lerp points to get intersection point on the edge
+	float3 Vertices[12];
+	float3 Normals[12];
+	for (uint i = 0; i < 12; ++i)
+	{
+		uint2 Pair = uint2(EdgeVertexIndices[i][0], EdgeVertexIndices[i][1]);
+		FVoxelVdbValueWithGradient Sample1 = Samples[Pair.x];
+		FVoxelVdbValueWithGradient Sample2 = Samples[Pair.y];
+		float3 VertexIndexPos1 = ThreadID + MCCubeVertex(Pair.x);
+		float3 VertexIndexPos2 = ThreadID + MCCubeVertex(Pair.y);
+		float InterpretationAlpha = (SurfaceIsoValue - Sample1.Value) / (Sample2.Value - Sample1.Value);
+		Vertices[i] = lerp(VertexIndexPos1, VertexIndexPos2, InterpretationAlpha);
+		Normals[i] = -normalize(lerp(Sample1.Gradient, Sample2.Gradient, InterpretationAlpha));
+	}
+
+	// Write triangles
+	uint Triangles[16] = TriangleTable[CubeSetup];
+	// Only 5 triangles at max, per cube
+	for (uint i = 0; i < 5; ++i)
+	{
+		uint StripIndexStart = i * 3;
+		// TODO: this might be optimized using vertex count table?
+		if (Triangles[StripIndexStart] == 255U) break;
+
+		for (int j = 0; j < 3; ++j)
+		{
+			float3 Pos1 = Vertices[Triangles[StripIndexStart + j + 0]];
+			float3 Pos2 = Vertices[Triangles[StripIndexStart + j + 1]];
+			float3 Pos3 = Vertices[Triangles[StripIndexStart + j + 2]];
+			WriteTriangle(Pos1, Pos2, Pos3);
+		}
+	}
 }
 
 #undef WORKGROUP_SIZE_X
