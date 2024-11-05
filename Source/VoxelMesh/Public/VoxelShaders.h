@@ -5,18 +5,32 @@
 #include "RHIStaticStates.h"
 #include "ShaderParameterStruct.h"
 
-class VOXELMESH_API FVoxelMarchingCubesCS : public FGlobalShader
+#if 0
+#define VOXEL_SHADER_PARAMETER_BUFFER_SRV(...) SHADER_PARAMETER_SRV(__VA_ARGS__)
+#define VOXEL_SHADER_PARAMETER_BUFFER_UAV(...) SHADER_PARAMETER_UAV(__VA_ARGS__)
+#else
+#define VOXEL_SHADER_PARAMETER_BUFFER_SRV(...) SHADER_PARAMETER_RDG_BUFFER_SRV(__VA_ARGS__)
+#define VOXEL_SHADER_PARAMETER_BUFFER_UAV(...) SHADER_PARAMETER_RDG_BUFFER_UAV(__VA_ARGS__)
+#endif
+
+BEGIN_UNIFORM_BUFFER_STRUCT(FVoxelMarchingCubeUniformParameters, VOXELMESH_API )
+	SHADER_PARAMETER(uint32, VoxelSize)
+	SHADER_PARAMETER(uint32, TotalCubes)
+	SHADER_PARAMETER(float, SurfaceIsoValue)
+END_UNIFORM_BUFFER_STRUCT()
+
+class VOXELMESH_API FVoxelMarchingCubesCalcCubeIndexCS : public FGlobalShader
 {
-	DECLARE_GLOBAL_SHADER(FVoxelMarchingCubesCS);
-	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesCS, FGlobalShader);
+	DECLARE_GLOBAL_SHADER(FVoxelMarchingCubesCalcCubeIndexCS);
+	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesCalcCubeIndexCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER(uint32, DimensionX)
-		SHADER_PARAMETER(uint32, DimensionY)
-		SHADER_PARAMETER(uint32, DimensionZ)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float3>, OutVertexBuffer)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, OutIndexBuffer)
-		SHADER_PARAMETER(float, SurfaceIsoValue)
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
+		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, CubeIndexOffsets)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, Counter)
 	END_SHADER_PARAMETER_STRUCT()
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& Environment);
+	
 };

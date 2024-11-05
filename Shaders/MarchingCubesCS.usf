@@ -4,16 +4,48 @@
 #include "/Engine/Public/Platform.ush"
 #include "VoxelVDBCommons.ush"
 
-uint DimensionX;
-uint DimensionY;
-uint DimensionZ;
+#if !defined(VOXEL_WRITABLE_CUBE_INDEX_OFFSETS)
+#	define VOXEL_WRITABLE_CUBE_INDEX_OFFSETS 0
+#endif
+
+cbuffer MarchingCubeParameters
+{
+	/// Assume dimension X, Y, Z is the same as VoxelSize
+	uint VoxelSize;
+
+	/// Total number of cubes
+	uint TotalCubes;
+
+	/// The SDF (Level Set in nanovdb) value smaller than this value will be treated as inside the surface
+	float SurfaceIsoValue;
+};
+
+/// Nanovdb Level Set Buffer
 pnanovdb_buf_t SrcVoxelData;
-float SurfaceIsoValue;
+
+/// Vertex Buffer Layout
+/// =================================
+/// | float3 | float(packed normal) |
+/// =================================
+/// Stride = 4 * sizeof(float)
 RWBuffer<float> OutVertexBuffer;
+/// Index Buffer Layout
+/// ============================
+/// | uint32 | uint32 | uint32 |
+/// ============================
 RWBuffer<uint> OutIndexBuffer;
 
-// Atomic counters
-groupshared uint TriangleCounter;
+/// Atomic counter
+/// Use InterlockedAdd(Counter[0], 1, Idx) instead of GroupMemoryBarrierWithGroupSync() to improve performance.
+// groupshared uint TriangleCounter;
+RWBuffer<uint> Counter;
+
+/// Cube index offset of specified ThreadID.x
+#if VOXEL_WRITABLE_CUBE_INDEX_OFFSETS
+RWBuffer<uint> CubeIndexOffsets;
+#else
+Buffer<uint> CubeIndexOffsets;
+#endif // VOXEL_WRITABLE_CUBE_INDEX_OFFSETS
 
 struct FVoxelVdbValueWithGradient
 {
@@ -23,16 +55,29 @@ struct FVoxelVdbValueWithGradient
 
 inline uint GetIndexByPoint(uint3 Point)
 {
-	// Row major order index
-	return Point.x + DimensionX * Point.y + (DimensionY * DimensionX * Point.z);
+	return Point.x;
 }
 
-float SampleVoxelPoint(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
+inline uint3 GetIndexSpaceCoordByLinearId(uint Index)
 {
-	return ReadVdbValue(IndexSpaceCoord, Sampler.Buffer, Sampler.GridType, Sampler.Accessor);
+	const uint SizeXY = floor(Index / VoxelSize);
+	const uint IndexZ = Index - (SizeXY * VoxelSize); // Rest i of the cube volume
+	const uint IndexX = floor(SizeXY / VoxelSize);
+	const uint IndexY = SizeXY - (IndexX * VoxelSize);
+	return uint3(IndexX, IndexY, IndexZ);
 }
 
-FVoxelVdbValueWithGradient SampleVoxelPointWithGradient(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
+inline uint3 SafeIndexCoord(uint3 IndexSpaceCoord)
+{
+	return min(IndexSpaceCoord, VoxelSize - 1);
+}
+
+inline float SampleVoxelPoint(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
+{
+	return ReadVdbValue(SafeIndexCoord(IndexSpaceCoord), Sampler.Buffer, Sampler.GridType, Sampler.Accessor);
+}
+
+FVoxelVdbValueWithGradient SampleVoxelPointWithGradientSafe(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
 {
 	uint3 IndexPrevious = max(IndexSpaceCoord, 1) - 1;
 	uint3 IndexNext = min(IndexSpaceCoord + 1, float3(DimensionX, DimensionY, DimensionZ) - 1);
@@ -55,6 +100,77 @@ FVoxelVdbValueWithGradient SampleVoxelPointWithGradient(uint3 IndexSpaceCoord, i
 	return Result;
 }
 
+inline uint GetAtomicCounter()
+{
+	uint Value;
+	InterlockedAdd(Counter[0], 1, Value);
+	return Value;
+}
+
+inline uint CalcCubeIndex(uint3 IndexCoord, in out FVoxelVdbSampler Sampler)
+{
+	float Samples[8];
+	for (uint i = 0; i < sizeof(Samples) / sizeof(Samples[0]); ++i)
+	{
+		Samples[i] = SampleVoxelPoint(IndexCoord + MCCubeVertex(i), Sampler);
+	}
+
+	uint CubeIndex = 0;
+	for (uint i = 0; i < sizeof(Samples) / sizeof(Samples[0]); ++i)
+	{
+		if (Samples[i] <= SurfaceIsoValue)
+		{
+			CubeIndex |= 1U << i;
+		}
+	}
+
+	return CubeIndex;
+}
+
+#define WORKGROUP_SIZE_X 64
+#define WORKGROUP_SIZE_Y 1
+#define WORKGROUP_SIZE_Z 1
+
+[numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
+void CalcCubeIndexCS(uint3 ThreadID: SV_DispatchThreadID)
+{
+	// Boundary check to prevent dirty result.
+	const uint LinearIndex = GetIndexByPoint(ThreadID);
+	BRANCH if (LinearIndex >= TotalCubes)
+	{
+		return;
+	}
+	
+	// Create Sampler
+	FVoxelVdbSampler Sampler = CreateVdbSampler(SrcVoxelData);
+
+	// Get coordinate from ThreadID.x
+	const uint3 Coord = GetIndexSpaceCoordByLinearId(LinearIndex);
+
+	// Cube Index
+	const uint CubeIndex = CalcCubeIndex(Coord, Sampler);
+
+	// Filtering out empty cube to prevent an unnecessary atomic operation.
+	BRANCH
+	if (EdgeTable[CubeIndex] == 0)
+	{
+		uint Idx = GetAtomicCounter();
+		CubeIndexOffsets[LinearIndex] = Idx;
+	}
+	else
+	{
+		CubeIndexOffsets[LinearIndex] = ~0U;
+	}
+}
+
+[numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
+void CalcVertexAndIndexPrefixSumCS(uint3 ThreadID: SV_DispatchThreadID)
+{
+}
+
+
+// Old BF implementation
+#if 0
 void WriteTriangle(float3 Pos1, float3 Pos2, float3 Pos3)
 {
 	uint Counter;
@@ -78,10 +194,6 @@ void WriteTriangle(float3 Pos1, float3 Pos2, float3 Pos3)
 	OutIndexBuffer[TriangleIndexStart + 1] = TriangleIndexStart + 1;
 	OutIndexBuffer[TriangleIndexStart + 2] = TriangleIndexStart + 2;
 }
-
-#define WORKGROUP_SIZE_X 4
-#define WORKGROUP_SIZE_Y 4
-#define WORKGROUP_SIZE_Z 4
 
 [numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
 void MainCS(uint3 ThreadID: SV_DispatchThreadID)
@@ -151,7 +263,4 @@ void MainCS(uint3 ThreadID: SV_DispatchThreadID)
 		}
 	}
 }
-
-#undef WORKGROUP_SIZE_X
-#undef WORKGROUP_SIZE_Y
-#undef WORKGROUP_SIZE_Z
+#endif

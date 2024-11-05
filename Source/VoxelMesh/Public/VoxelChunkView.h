@@ -30,6 +30,9 @@ public:
 
 	virtual void Serialize(FArchive& Ar) override;
 
+	UFUNCTION(BlueprintCallable)
+	void TestDispatch();
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
 	uint32 DimensionX;
@@ -39,6 +42,9 @@ protected:
 	
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
 	uint32 DimensionZ;
+
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Category = "Voxel | Debug")
+	UTextureRenderTarget2D* RenderTarget_Debug;
 
 	nanovdb::GridHandle<nanovdb::HostBuffer> HostVdbBuffer;
 

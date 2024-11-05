@@ -1,3 +1,9 @@
 ﻿#include "VoxelShaders.h"
 
-IMPLEMENT_GLOBAL_SHADER(FVoxelMarchingCubesCS, "/Plugin/VoxelMesh/MarchingCubesCS.usf", "MainCS", SF_Compute);
+IMPLEMENT_UNIFORM_BUFFER_STRUCT(FVoxelMarchingCubeUniformParameters, "MarchingCubeParameters")
+IMPLEMENT_GLOBAL_SHADER(FVoxelMarchingCubesCalcCubeIndexCS, "/Plugin/VoxelMesh/MarchingCubesCS.usf", "CalcCubeIndexCS", SF_Compute);
+
+void FVoxelMarchingCubesCalcCubeIndexCS::ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& Environment)
+{
+	Environment.SetDefine(TEXT("VOXEL_WRITABLE_CUBE_INDEX_OFFSETS"), true);
+}
