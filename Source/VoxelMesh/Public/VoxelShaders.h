@@ -34,3 +34,19 @@ class VOXELMESH_API FVoxelMarchingCubesCalcCubeIndexCS : public FGlobalShader
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& Environment);
 	
 };
+
+class VOXELMESH_API FVoxelMarchingCubesCalcCubeOffsetCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FVoxelMarchingCubesCalcCubeOffsetCS);
+	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesCalcCubeOffsetCS, FGlobalShader);
+	
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
+		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
+		VOXEL_SHADER_PARAMETER_BUFFER_SRV(Buffer<uint32>, InCubeIndexOffsets)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, Counter)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutNonEmptyCubeLinearId)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutNonEmptyCubeIndex)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutVertexIndexOffset)
+	END_SHADER_PARAMETER_STRUCT()
+};

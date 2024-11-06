@@ -4,6 +4,11 @@
 #include "/Engine/Public/Platform.ush"
 #include "VoxelVDBCommons.ush"
 
+/**
+ * Thanks 龚大.
+ * https://github.com/gongminmin/AIHoloImager/tree/main
+ */
+
 #if !defined(VOXEL_WRITABLE_CUBE_INDEX_OFFSETS)
 #	define VOXEL_WRITABLE_CUBE_INDEX_OFFSETS 0
 #endif
@@ -36,13 +41,26 @@ RWBuffer<float> OutVertexBuffer;
 RWBuffer<uint> OutIndexBuffer;
 
 /// Atomic counter
-/// Use InterlockedAdd(Counter[0], 1, Idx) instead of GroupMemoryBarrierWithGroupSync() to improve performance.
-// groupshared uint TriangleCounter;
+/// Size >= 3
 RWBuffer<uint> Counter;
 
 /// Cube index offset of specified ThreadID.x
+/// It stores the execution order of the threads that has valid cube index.
+/// Also means the prefix sum of the valid cases.
 RWBuffer<uint> OutCubeIndexOffsets;
 Buffer<uint> InCubeIndexOffsets;
+
+/// Mapping from "prefix sum of valid cases" to "linear index"
+RWBuffer<uint> OutNonEmptyCubeLinearId;
+Buffer<uint> InNonEmptyCubeLinearId;
+
+/// Cube index of a cube
+RWBuffer<uint> OutNonEmptyCubeIndex;
+Buffer<uint> InNonEmptyCubeIndex;
+
+/// Indicate the base address when write to VBO/IBO.
+RWBuffer<uint2> OutVertexIndexOffset;
+Buffer<uint2> InVertexIndexOffset;
 
 struct FVoxelVdbValueWithGradient
 {
@@ -77,7 +95,7 @@ inline float SampleVoxelPoint(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sam
 FVoxelVdbValueWithGradient SampleVoxelPointWithGradientSafe(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
 {
 	uint3 IndexPrevious = max(IndexSpaceCoord, 1) - 1;
-	uint3 IndexNext = min(IndexSpaceCoord + 1, float3(DimensionX, DimensionY, DimensionZ) - 1);
+	uint3 IndexNext = min(IndexSpaceCoord + 1, float3(VoxelSize, VoxelSize, VoxelSize) - 1);
 	uint3 Index = IndexSpaceCoord;
 
 	FVoxelVdbValueWithGradient Result;
@@ -97,10 +115,10 @@ FVoxelVdbValueWithGradient SampleVoxelPointWithGradientSafe(uint3 IndexSpaceCoor
 	return Result;
 }
 
-inline uint GetAtomicCounter()
+inline uint GetAtomicCounter(uint Index, uint ValueToAdd)
 {
 	uint Value;
-	InterlockedAdd(Counter[0], 1U, Value);
+	InterlockedAdd(Counter[Index], ValueToAdd, Value);
 	return Value;
 }
 
@@ -151,7 +169,7 @@ void CalcCubeIndexCS(uint3 ThreadID: SV_DispatchThreadID)
 	BRANCH
 	if (EdgeTable[CubeIndex] == 0)
 	{
-		uint Idx = GetAtomicCounter();
+		uint Idx = GetAtomicCounter(0, 1U);
 		OutCubeIndexOffsets[LinearIndex] = Idx;
 	}
 	else
@@ -163,6 +181,50 @@ void CalcCubeIndexCS(uint3 ThreadID: SV_DispatchThreadID)
 [numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
 void CalcVertexAndIndexPrefixSumCS(uint3 ThreadID: SV_DispatchThreadID)
 {
+	// Boundary check
+	const uint LinearIndex = GetIndexByPoint(ThreadID);
+	BRANCH if (LinearIndex >= TotalCubes)
+	{
+		return;
+	}
+
+	const uint CubeOffset = InCubeIndexOffsets[LinearIndex];
+	BRANCH if (CubeOffset == ~0U)
+	{
+		return;
+	}
+
+	// Filter out empty cases and save the relationship.
+	OutNonEmptyCubeLinearId[CubeOffset] = LinearIndex;
+
+	// Save the cube index of current cube
+	FVoxelVdbSampler Sampler = CreateVdbSampler(SrcVoxelData);
+	const uint3 Coord = GetIndexSpaceCoordByLinearId(LinearIndex);
+	const uint CubeIndex = CalcCubeIndex(Coord, Sampler);
+	OutNonEmptyCubeIndex[CubeOffset] = CubeIndex;
+
+	// Calc there is how many indices in current cube
+	const uint NumIndices = TriangleNumTable[CubeIndex];
+
+	// How many vertices will be produced in this cube
+	const uint Edges = EdgeTable[CubeIndex];
+	uint NumVertices = 0;
+	BRANCH if (Edges != 0)
+	{
+		for (uint i = 0; i < sizeof(OwnedEdge) / sizeof(OwnedEdge[0]); ++i)
+		{
+			const uint Edge = OwnedEdge[i];
+			if (Edge & (1U << Edge))
+			{
+				++NumVertices;
+			}
+		}
+	}
+
+	// Use atomic counter to calculate the prefix sum
+	uint VertexIndex = GetAtomicCounter(1, NumVertices);
+	uint IndexIndex = GetAtomicCounter(2, NumIndices);
+	OutVertexIndexOffset[CubeOffset] = uint2(VertexIndex, IndexIndex);
 }
 
 

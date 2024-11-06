@@ -75,6 +75,8 @@ void UVoxelChunkView::TestDispatch()
 		FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 		check(ShaderMap);
 
+		const size_t TotalCubes = DimensionX * DimensionY * DimensionZ;
+
 		// RenderDoc Capture
 		FRDGPassRef BeginCapturePass = GraphBuilder.AddPass(
 			RDG_EVENT_NAME("BeginCapture"),
@@ -107,75 +109,80 @@ void UVoxelChunkView::TestDispatch()
 		FRDGBufferSRVRef GridBufferSRV = GraphBuilder.CreateSRV(GridBuffer, EPixelFormat::PF_R32_UINT);
 
 		// Cube index offset buffer
-		FRDGBufferDesc CubeIndexOffsetBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), DimensionX * DimensionY * DimensionZ);
+		FRDGBufferDesc CubeIndexOffsetBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), TotalCubes);
 		FRDGBufferRef CubeIndexOffsetBuffer = GraphBuilder.CreateBuffer(CubeIndexOffsetBufferDesc, TEXT("Cube Index Offset"));
 		FRDGBufferUAVRef CubeIndexOffsetBufferUAV = GraphBuilder.CreateUAV(CubeIndexOffsetBuffer, EPixelFormat::PF_R32_UINT);
 		FRDGBufferSRVRef CubeIndexOffsetBufferSRV = GraphBuilder.CreateSRV(CubeIndexOffsetBuffer, EPixelFormat::PF_R32_UINT);
+
+		// We create these buffer later
+		FRDGBufferRef NonEmptyCubeLinearIdBuffer = nullptr;
+		FRDGBufferUAVRef NonEmptyCubeLinearIdBufferUAV = nullptr;
+		FRDGBufferSRVRef NonEmptyCubeLinearIdBufferSRV = nullptr;
 		
+		FRDGBufferRef NonEmptyCubeIndexBuffer = nullptr;
+		FRDGBufferUAVRef NonEmptyCubeIndexBufferUAV = nullptr;
+		FRDGBufferSRVRef NonEmptyCubeIndexBufferSRV = nullptr;
+		
+		FRDGBufferRef VertexIndexOffsetBuffer = nullptr;
+		FRDGBufferUAVRef VertexIndexOffsetBufferUAV = nullptr;
+		FRDGBufferSRVRef VertexIndexOffsetBufferSRV = nullptr;
+		
+		/////////////////////////
+		/// Calc Cube Index (Culling)
+		/////////////////////////
+		auto CalcCubeIndexCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
+		auto* CalcCubeIndexParameters = GraphBuilder.AllocParameters<FVoxelMarchingCubesCalcCubeIndexCS::FParameters>();
+
+		CalcCubeIndexParameters->Counter = CounterBufferUAV;
+		CalcCubeIndexParameters->MarchingCubeParameters = UniformParametersBuffer;
+		CalcCubeIndexParameters->SrcVoxelData = GridBufferSRV;
+		CalcCubeIndexParameters->OutCubeIndexOffsets = CubeIndexOffsetBufferUAV;
+		
+		FRDGPassRef CalcPass = FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Voxel Marching Cubes Calc CubeIndex"), CalcCubeIndexCSRef, CalcCubeIndexParameters, GetDispatchSize(TotalCubes));
+
+		/////////////////////////
+		/// Read back num non empty cube from counter
+		/////////////////////////
+		TSharedRef<FRHIGPUBufferReadback> CounterReadbackRequest = MakeShared<FRHIGPUBufferReadback>(TEXT("Counter Readback Request"));
+		auto* ReadbackPassParameters = GraphBuilder.AllocParameters<FReadbackBufferParameters>();
+		ReadbackPassParameters->Buffer = CounterBuffer;
+		GraphBuilder.AddPass(RDG_EVENT_NAME("Readback counter"), ReadbackPassParameters, ERDGPassFlags::Readback, [CounterReadbackRequest, CounterBuffer,
+				&NonEmptyCubeLinearIdBuffer, &NonEmptyCubeLinearIdBufferUAV, &NonEmptyCubeLinearIdBufferSRV,
+				&NonEmptyCubeIndexBuffer, &NonEmptyCubeIndexBufferUAV, &NonEmptyCubeIndexBufferSRV,
+				&VertexIndexOffsetBuffer, &VertexIndexOffsetBufferUAV, &VertexIndexOffsetBufferSRV] (FRHICommandListImmediate& RHICommandListLocal)
 		{
-			auto CSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
-			auto* Parameters = GraphBuilder.AllocParameters<FVoxelMarchingCubesCalcCubeIndexCS::FParameters>();
+			CounterReadbackRequest->EnqueueCopy(RHICommandListLocal, CounterBuffer->GetRHI(), 0U);
+			CounterReadbackRequest->Wait(RHICommandListLocal, FRHIGPUMask::All());
+			uint32 NumNonEmptyCubes = *(static_cast<uint32*>(CounterReadbackRequest->Lock(3 * sizeof(uint32))));
+			CounterReadbackRequest->Unlock();
+		});
 
-			Parameters->Counter = CounterBufferUAV;
-			Parameters->MarchingCubeParameters = UniformParametersBuffer;
-			Parameters->SrcVoxelData = GridBufferSRV;
-			Parameters->OutCubeIndexOffsets = CubeIndexOffsetBufferUAV;
-			
-			FRDGPassRef CalcPass = FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Voxel Marching Cubes Calc CubeIndex"), CSRef, Parameters, GetDispatchSize(DimensionX * DimensionY * DimensionZ));
-			
-			// RenderDoc Capture
-			FRDGPassRef EndCapturePass = GraphBuilder.AddPass(RDG_EVENT_NAME("End Capture"), ERDGPassFlags::None, [] (FRHICommandListImmediate& RHICmdList) 
-			{
-				IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
-			});
+		/////////////////////////
+		/// Prefix sum
+		/////////////////////////
+		auto PrefixSumCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeOffsetCS>();
+		auto* PrefixSumParameters = GraphBuilder.AllocParameters<FVoxelMarchingCubesCalcCubeOffsetCS::FParameters>();
+		
+		PrefixSumParameters->Counter = CounterBufferUAV;
+		PrefixSumParameters->MarchingCubeParameters = UniformParametersBuffer;
+		PrefixSumParameters->SrcVoxelData = GridBufferSRV;
+		PrefixSumParameters->InCubeIndexOffsets = CubeIndexOffsetBufferSRV;
+		PrefixSumParameters->OutNonEmptyCubeLinearId = NonEmptyCubeLinearIdBufferUAV;
+		PrefixSumParameters->OutNonEmptyCubeIndex = NonEmptyCubeIndexBufferUAV;
+		PrefixSumParameters->OutVertexIndexOffset = VertexIndexOffsetBufferUAV;
+		
+		FRDGPassRef PrefixSumPass = FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Voxel Marching Cubes Prefix Sum"), PrefixSumCSRef, PrefixSumParameters, GetDispatchSize(TotalCubes));
+		
+		// End RenderDoc Capture
+		FRDGPassRef EndCapturePass = GraphBuilder.AddPass(RDG_EVENT_NAME("End Capture"), ERDGPassFlags::None, [] (FRHICommandListImmediate& RHICmdList) 
+		{
+			IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
+		});
 
-			GraphBuilder.AddPassDependency(CalcPass, EndCapturePass);
-			GraphBuilder.AddPassDependency(BeginCapturePass, CalcPass);
-		}
+		GraphBuilder.AddPassDependency(BeginCapturePass, CalcPass);
+		GraphBuilder.AddPassDependency(CalcPass, PrefixSumPass);
+		GraphBuilder.AddPassDependency(PrefixSumPass, EndCapturePass);
 
 		GraphBuilder.Execute();
-
-		//
-		// FRHIComputeCommandList& ComputeCommandList = FRHIComputeCommandList::Get(CmdList);
-		// FVoxelMarchingCubesCS::FParameters Parameters{};
-		//
-		// Parameters.DimensionX = DimensionX;
-		// Parameters.DimensionY = DimensionY;
-		// Parameters.DimensionZ = DimensionZ;
-		// Parameters.SurfaceIsoValue = 0.0f;
-		//
-		// nanovdb::NanoGrid<float>* GridData = HostVdbBuffer.grid<float>();
-		// FRHIResourceCreateInfo GirdBufferCreateInfo(TEXT("VoxelVdbData"));
-		// FVoxelResourceArrayUploadArrayView UploadArrayView(GridData, HostVdbBuffer.size());
-		// GirdBufferCreateInfo.ResourceArray = &UploadArrayView;
-		// FBufferRHIRef SrcVoxelBuffer = CmdList.CreateStructuredBuffer(sizeof(uint32), HostVdbBuffer.size(), EBufferUsageFlags::Static | EBufferUsageFlags::UnorderedAccess, ERHIAccess::SRVMask, GirdBufferCreateInfo);
-		// Parameters.SrcVoxelData = CmdList.CreateShaderResourceView(SrcVoxelBuffer);
-		//
-		// FRHIResourceCreateInfo OutVertexBufferCreateInfo(TEXT("VoxelVertexBuffer"));
-		// FBufferRHIRef OutVertexBuffer = CmdList.CreateBuffer(sizeof(float) * 9 * 15 * DimensionX * DimensionY * DimensionZ, EBufferUsageFlags::VertexBuffer | EBufferUsageFlags::UnorderedAccess, sizeof(float), ERHIAccess::UAVMask, OutVertexBufferCreateInfo);
-		// Parameters.OutVertexBuffer = CmdList.CreateUnorderedAccessView(OutVertexBuffer, PF_R32_FLOAT);
-		//
-		// FRHIResourceCreateInfo OutIndexBufferCreateInfo(TEXT("VoxelIndexBuffer"));
-		// FBufferRHIRef OutIndexBuffer = CmdList.CreateBuffer(sizeof(uint32) * 3 * 15 * DimensionX * DimensionY * DimensionZ, EBufferUsageFlags::IndexBuffer | EBufferUsageFlags::UnorderedAccess, sizeof(float), ERHIAccess::UAVMask, OutIndexBufferCreateInfo);
-		// Parameters.OutIndexBuffer = CmdList.CreateUnorderedAccessView(OutIndexBuffer, PF_R32_UINT);
-		//
-		// FComputeShaderUtils::Dispatch(ComputeCommandList, CSRef, Parameters, FIntVector { FMath::CeilToInt(DimensionX / 1.f), FMath::CeilToInt(DimensionY / 1.f), FMath::CeilToInt(DimensionZ / 1.f) });
-		//
-		// CmdList.SubmitAndBlockUntilGPUIdle();
-		//
-		// TArray<float> VertexBufferData{};
-		// TArray<uint32> IndexBufferData{};
-		// VertexBufferData.AddUninitialized(OutVertexBuffer->GetSize());
-		// IndexBufferData.AddUninitialized(OutIndexBuffer->GetSize());
-		//
-		// FRHIGPUBufferReadback VertexReadback{TEXT("VoxelVertexReadback")};
-		// FRHIGPUBufferReadback IndexReadback{TEXT("VoxelIndexReadback")};
-		// VertexReadback.EnqueueCopy(CmdList, OutVertexBuffer, 0);
-		// IndexReadback.EnqueueCopy(CmdList, OutIndexBuffer, 0);
-		//
-		// FMemory::Memcpy(VertexBufferData.GetData(), VertexReadback.Lock(OutVertexBuffer->GetSize()), OutVertexBuffer->GetSize());
-		// FMemory::Memcpy(IndexBufferData.GetData(), IndexReadback.Lock(OutIndexBuffer->GetSize()), OutIndexBuffer->GetSize());
-		// VertexReadback.Unlock();
-		// IndexReadback.Unlock();
 	});
 }
