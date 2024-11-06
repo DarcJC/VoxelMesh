@@ -3,14 +3,12 @@
 
 #include "VoxelChunkView.h"
 
-#include "ImageUtils.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "VoxelRenderingWorldSubsystem.h"
 #include "VoxelShaders.h"
-#include <iostream>
 
-#include "SystemTextures.h"
+#include "IRenderCaptureProvider.h"
 #include "Engine/TextureRenderTarget2D.h"
 
 UVoxelChunkView::UVoxelChunkView(const FObjectInitializer& ObjectInitializer)
@@ -73,9 +71,70 @@ void UVoxelChunkView::TestDispatch()
 {
 	ENQUEUE_RENDER_COMMAND(QwQVoxel)([this] (FRHICommandListImmediate& CmdList)
 	{
-		// FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-		// check(ShaderMap);
-		// auto CSRef = ShaderMap->GetShader<FVoxelMarchingCubesCS>();
+		FRDGBuilder GraphBuilder(CmdList);
+		FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+		check(ShaderMap);
+
+		// RenderDoc Capture
+		FRDGPassRef BeginCapturePass = GraphBuilder.AddPass(
+			RDG_EVENT_NAME("BeginCapture"),
+			ERDGPassFlags::None,
+			[] (FRHICommandListImmediate& RHICommandListLocal)
+		{
+			IRenderCaptureProvider::Get().BeginCapture(&RHICommandListLocal, IRenderCaptureProvider::ECaptureFlags_Launch);
+		});
+		
+		// Atomic counter buffer
+		static constexpr uint32 DEFAULT_COUNTER_VALUES[] { 0, 0, 0, 0 };
+		FRDGBufferDesc Desc = FRDGBufferDesc::CreateUploadDesc(sizeof(uint32), 4);
+		Desc.Usage |= EBufferUsageFlags::UnorderedAccess;
+		FRDGBufferRef CounterBuffer = GraphBuilder.CreateBuffer(Desc, TEXT("Voxel Atomic Counter"));
+		GraphBuilder.QueueBufferUpload(CounterBuffer, DEFAULT_COUNTER_VALUES, std::size(DEFAULT_COUNTER_VALUES));
+		FRDGBufferUAVRef CounterBufferUAV = GraphBuilder.CreateUAV(CounterBuffer, EPixelFormat::PF_R32_UINT);
+
+		// Uniform buffer
+		FVoxelMarchingCubeUniformParameters* UniformParameters =GraphBuilder.AllocParameters<FVoxelMarchingCubeUniformParameters>();
+		UniformParameters->VoxelSize = DimensionX;
+		UniformParameters->SurfaceIsoValue = 0.f;
+		UniformParameters->TotalCubes = (DimensionX + 1) * (DimensionY + 1) * (DimensionZ + 1);
+		TRDGUniformBufferRef<FVoxelMarchingCubeUniformParameters> UniformParametersBuffer = GraphBuilder.CreateUniformBuffer(UniformParameters);
+
+		// Nanovdb data buffer
+		nanovdb::NanoGrid<float>* GridData = HostVdbBuffer.grid<float>();
+		FRDGBufferDesc GridBufferDesc = FRDGBufferDesc::CreateUploadDesc(sizeof(float), HostVdbBuffer.size());
+		FRDGBufferRef GridBuffer = GraphBuilder.CreateBuffer(GridBufferDesc, TEXT("Voxel Data Buffer"));
+		GraphBuilder.QueueBufferUpload(GridBuffer, GridData, HostVdbBuffer.size());
+		FRDGBufferSRVRef GridBufferSRV = GraphBuilder.CreateSRV(GridBuffer, EPixelFormat::PF_R32_UINT);
+
+		// Cube index offset buffer
+		FRDGBufferDesc CubeIndexOffsetBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), DimensionX * DimensionY * DimensionZ);
+		FRDGBufferRef CubeIndexOffsetBuffer = GraphBuilder.CreateBuffer(CubeIndexOffsetBufferDesc, TEXT("Cube Index Offset"));
+		FRDGBufferUAVRef CubeIndexOffsetBufferUAV = GraphBuilder.CreateUAV(CubeIndexOffsetBuffer, EPixelFormat::PF_R32_UINT);
+		FRDGBufferSRVRef CubeIndexOffsetBufferSRV = GraphBuilder.CreateSRV(CubeIndexOffsetBuffer, EPixelFormat::PF_R32_UINT);
+		
+		{
+			auto CSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
+			auto* Parameters = GraphBuilder.AllocParameters<FVoxelMarchingCubesCalcCubeIndexCS::FParameters>();
+
+			Parameters->Counter = CounterBufferUAV;
+			Parameters->MarchingCubeParameters = UniformParametersBuffer;
+			Parameters->SrcVoxelData = GridBufferSRV;
+			Parameters->OutCubeIndexOffsets = CubeIndexOffsetBufferUAV;
+			
+			FRDGPassRef CalcPass = FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Voxel Marching Cubes Calc CubeIndex"), CSRef, Parameters, GetDispatchSize(DimensionX * DimensionY * DimensionZ));
+			
+			// RenderDoc Capture
+			FRDGPassRef EndCapturePass = GraphBuilder.AddPass(RDG_EVENT_NAME("End Capture"), ERDGPassFlags::None, [] (FRHICommandListImmediate& RHICmdList) 
+			{
+				IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
+			});
+
+			GraphBuilder.AddPassDependency(CalcPass, EndCapturePass);
+			GraphBuilder.AddPassDependency(BeginCapturePass, CalcPass);
+		}
+
+		GraphBuilder.Execute();
+
 		//
 		// FRHIComputeCommandList& ComputeCommandList = FRHIComputeCommandList::Get(CmdList);
 		// FVoxelMarchingCubesCS::FParameters Parameters{};

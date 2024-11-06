@@ -12,7 +12,7 @@ public class VoxelMesh : ModuleRules
 	public VoxelMesh(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-		
+        
 		PublicIncludePaths.AddRange(
 			new string[] {
 				// ... add public include paths required here ...
@@ -60,5 +60,17 @@ public class VoxelMesh : ModuleRules
 				// ... add any modules that your module loads dynamically here ...
 			}
 			);
+
+		
+		if (Target.bBuildWithEditorOnlyData && Target.bBuildEditor)
+		{
+
+            PrivateDependencyModuleNames.AddRange(
+                new string[]
+                {
+					"RenderDocPlugin",
+				}
+				);
+		}
 	}
 }

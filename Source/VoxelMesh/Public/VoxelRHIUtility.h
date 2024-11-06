@@ -51,3 +51,18 @@ struct FVoxelResourceArrayUploadArrayView : public FResourceArrayUploadInterface
 	{
 	}
 };
+
+FORCEINLINE_DEBUGGABLE static FIntVector GetDispatchSize(size_t TotalCount)
+{
+	// There is a dimension size limitation in DX11, DX12, OpenGL.
+	if (TotalCount <= UINT16_MAX)
+	{
+		return { static_cast<int>(TotalCount), 1, 1 };
+	}
+
+	constexpr int32_t DimensionX = 65535U;
+	const int32_t DimensionY = FMath::CeilToInt32(TotalCount / static_cast<float>(DimensionX));
+	constexpr int32_t DimensionZ = 1;
+
+	return { DimensionX, DimensionY, DimensionZ };
+}

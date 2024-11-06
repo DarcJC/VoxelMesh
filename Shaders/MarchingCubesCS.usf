@@ -41,11 +41,8 @@ RWBuffer<uint> OutIndexBuffer;
 RWBuffer<uint> Counter;
 
 /// Cube index offset of specified ThreadID.x
-#if VOXEL_WRITABLE_CUBE_INDEX_OFFSETS
-RWBuffer<uint> CubeIndexOffsets;
-#else
-Buffer<uint> CubeIndexOffsets;
-#endif // VOXEL_WRITABLE_CUBE_INDEX_OFFSETS
+RWBuffer<uint> OutCubeIndexOffsets;
+Buffer<uint> InCubeIndexOffsets;
 
 struct FVoxelVdbValueWithGradient
 {
@@ -55,7 +52,7 @@ struct FVoxelVdbValueWithGradient
 
 inline uint GetIndexByPoint(uint3 Point)
 {
-	return Point.x;
+	return Point.x + Point.y * 65535U;
 }
 
 inline uint3 GetIndexSpaceCoordByLinearId(uint Index)
@@ -103,7 +100,7 @@ FVoxelVdbValueWithGradient SampleVoxelPointWithGradientSafe(uint3 IndexSpaceCoor
 inline uint GetAtomicCounter()
 {
 	uint Value;
-	InterlockedAdd(Counter[0], 1, Value);
+	InterlockedAdd(Counter[0], 1U, Value);
 	return Value;
 }
 
@@ -155,11 +152,11 @@ void CalcCubeIndexCS(uint3 ThreadID: SV_DispatchThreadID)
 	if (EdgeTable[CubeIndex] == 0)
 	{
 		uint Idx = GetAtomicCounter();
-		CubeIndexOffsets[LinearIndex] = Idx;
+		OutCubeIndexOffsets[LinearIndex] = Idx;
 	}
 	else
 	{
-		CubeIndexOffsets[LinearIndex] = ~0U;
+		OutCubeIndexOffsets[LinearIndex] = ~0U;
 	}
 }
 

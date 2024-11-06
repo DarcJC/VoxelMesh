@@ -24,11 +24,4 @@ void FVoxelViewExtension::PreRenderView_RenderThread(FRDGBuilder& GraphBuilder, 
 
 void FVoxelViewExtension::PreRenderBasePass_RenderThread(FRDGBuilder& GraphBuilder, bool bDepthBufferIsPopulated)
 {
-	const auto ComputeShader = GetGlobalShaderMap(GMaxRHIFeatureLevel)->GetShader<FVoxelMarchingCubesCS>();
-	for (UVoxelChunkView* Chunk : Chunks)
-	{
-		if (IsValid(Chunk))
-		{
-		}
-	}
 }

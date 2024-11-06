@@ -27,7 +27,7 @@ class VOXELMESH_API FVoxelMarchingCubesCalcCubeIndexCS : public FGlobalShader
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
-		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, CubeIndexOffsets)
+		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutCubeIndexOffsets)
 		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, Counter)
 	END_SHADER_PARAMETER_STRUCT()
 
