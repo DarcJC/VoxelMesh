@@ -124,11 +124,16 @@ inline uint GetAtomicCounter(uint Index, uint ValueToAdd)
 
 inline uint CalcCubeIndex(uint3 IndexCoord, in out FVoxelVdbSampler Sampler)
 {
-	float Samples[8];
-	for (uint i = 0; i < sizeof(Samples) / sizeof(Samples[0]); ++i)
-	{
-		Samples[i] = SampleVoxelPoint(IndexCoord + MCCubeVertex(i), Sampler);
-	}
+	float Samples[8] = {
+		SampleVoxelPoint(IndexCoord + uint3(0, 0, 0), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(1, 0, 0), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(1, 1, 0), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(0, 1, 0), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(0, 0, 1), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(1, 0, 1), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(1, 1, 1), Sampler),
+		SampleVoxelPoint(IndexCoord + uint3(0, 1, 1), Sampler),
+	};
 
 	uint CubeIndex = 0;
 	for (uint i = 0; i < sizeof(Samples) / sizeof(Samples[0]); ++i)
@@ -167,7 +172,7 @@ void CalcCubeIndexCS(uint3 ThreadID: SV_DispatchThreadID)
 
 	// Filtering out empty cube to prevent an unnecessary atomic operation.
 	BRANCH
-	if (EdgeTable[CubeIndex] == 0)
+	if (EdgeTable[CubeIndex] != 0)
 	{
 		uint Idx = GetAtomicCounter(0, 1U);
 		OutCubeIndexOffsets[LinearIndex] = Idx;
@@ -199,22 +204,22 @@ void CalcVertexAndIndexPrefixSumCS(uint3 ThreadID: SV_DispatchThreadID)
 
 	// Save the cube index of current cube
 	FVoxelVdbSampler Sampler = CreateVdbSampler(SrcVoxelData);
-	const uint3 Coord = GetIndexSpaceCoordByLinearId(LinearIndex);
-	const uint CubeIndex = CalcCubeIndex(Coord, Sampler);
+	uint3 Coord = GetIndexSpaceCoordByLinearId(LinearIndex);
+	uint CubeIndex = CalcCubeIndex(Coord, Sampler);
 	OutNonEmptyCubeIndex[CubeOffset] = CubeIndex;
 
 	// Calc there is how many indices in current cube
 	const uint NumIndices = TriangleNumTable[CubeIndex];
 
 	// How many vertices will be produced in this cube
-	const uint Edges = EdgeTable[CubeIndex];
+	uint Edges = EdgeTable[CubeIndex];
 	uint NumVertices = 0;
 	BRANCH if (Edges != 0)
 	{
 		for (uint i = 0; i < sizeof(OwnedEdge) / sizeof(OwnedEdge[0]); ++i)
 		{
 			const uint Edge = OwnedEdge[i];
-			if (Edge & (1U << Edge))
+			if (Edges & (1U << Edge))
 			{
 				++NumVertices;
 			}

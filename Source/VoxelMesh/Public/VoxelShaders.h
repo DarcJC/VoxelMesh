@@ -45,8 +45,9 @@ class VOXELMESH_API FVoxelMarchingCubesCalcCubeOffsetCS : public FGlobalShader
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(Buffer<uint32>, InCubeIndexOffsets)
 		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, Counter)
-		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutNonEmptyCubeLinearId)
-		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutNonEmptyCubeIndex)
-		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutVertexIndexOffset)
+		// The creation of these resource will be delayed. So it don't managed by render graph.
+		SHADER_PARAMETER_UAV(RWBuffer<uint32>, OutNonEmptyCubeLinearId)
+		SHADER_PARAMETER_UAV(RWBuffer<uint32>, OutNonEmptyCubeIndex)
+		SHADER_PARAMETER_UAV(RWBuffer<uint32>, OutVertexIndexOffset)
 	END_SHADER_PARAMETER_STRUCT()
 };
