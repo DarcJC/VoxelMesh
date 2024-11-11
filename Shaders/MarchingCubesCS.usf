@@ -33,7 +33,7 @@ pnanovdb_buf_t SrcVoxelData;
 /// | float3 | float(packed normal) |
 /// =================================
 /// Stride = 4 * sizeof(float)
-RWBuffer<float> OutVertexBuffer;
+RWBuffer<float4> OutVertexBuffer;
 /// Index Buffer Layout
 /// ============================
 /// | uint32 | uint32 | uint32 |
@@ -62,6 +62,8 @@ Buffer<uint> InNonEmptyCubeIndex;
 RWBuffer<uint2> OutVertexIndexOffset;
 Buffer<uint2> InVertexIndexOffset;
 
+uint NumNonEmptyCubes;
+
 struct FVoxelVdbValueWithGradient
 {
 	float3 Gradient;
@@ -80,6 +82,11 @@ inline uint3 GetIndexSpaceCoordByLinearId(uint Index)
 	const uint IndexX = floor(SizeXY / VoxelSize);
 	const uint IndexY = SizeXY - (IndexX * VoxelSize);
 	return uint3(IndexX, IndexY, IndexZ);
+}
+
+uint GetLinearIdByIndexSpaceCoord(uint3 Coord)
+{
+    return Coord.z + VoxelSize * (Coord.y + VoxelSize * Coord.x);
 }
 
 inline uint3 SafeIndexCoord(uint3 IndexSpaceCoord)
@@ -145,6 +152,20 @@ inline uint CalcCubeIndex(uint3 IndexCoord, in out FVoxelVdbSampler Sampler)
 	}
 
 	return CubeIndex;
+}
+
+inline float3 InterpolateVertex(uint3 BeginPos, uint3 EndPos, float BeginValue, float EndValue)
+{
+	float3 Result;
+	if (BeginValue == EndValue)
+	{
+		Result = (BeginPos + EndPos) * 0.5f;
+	}
+	else
+	{
+		Result = lerp(BeginPos, EndPos, (SurfaceIsoValue - BeginValue) / (EndValue - BeginValue));
+	}
+	return Result;
 }
 
 #define WORKGROUP_SIZE_X 64
@@ -233,98 +254,117 @@ void CalcVertexAndIndexPrefixSumCS(uint3 ThreadID: SV_DispatchThreadID)
 }
 
 
-// Old BF implementation
-#if 0
-void WriteTriangle(float3 Pos1, float3 Pos2, float3 Pos3)
-{
-	uint Counter;
-	InterlockedAdd(TriangleCounter, 1U, Counter);
-	GroupMemoryBarrierWithGroupSync();
-
-	uint VertexIndexStart = Counter * 9;
-	
-	OutVertexBuffer[VertexIndexStart + 0] = Pos1.x;
-	OutVertexBuffer[VertexIndexStart + 1] = Pos1.y;
-	OutVertexBuffer[VertexIndexStart + 2] = Pos1.z;
-	OutVertexBuffer[VertexIndexStart + 3] = Pos2.x;
-	OutVertexBuffer[VertexIndexStart + 4] = Pos2.y;
-	OutVertexBuffer[VertexIndexStart + 5] = Pos2.z;
-	OutVertexBuffer[VertexIndexStart + 6] = Pos3.x;
-	OutVertexBuffer[VertexIndexStart + 7] = Pos3.y;
-	OutVertexBuffer[VertexIndexStart + 8] = Pos3.z;
-
-	uint TriangleIndexStart = Counter * 3;
-	OutIndexBuffer[TriangleIndexStart + 0] = TriangleIndexStart + 0;
-	OutIndexBuffer[TriangleIndexStart + 1] = TriangleIndexStart + 1;
-	OutIndexBuffer[TriangleIndexStart + 2] = TriangleIndexStart + 2;
-}
-
 [numthreads(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, WORKGROUP_SIZE_Z)]
-void MainCS(uint3 ThreadID: SV_DispatchThreadID)
+void MarchingCubeMeshGenerationCS(uint3 ThreadID: SV_DispatchThreadID)
 {
-	// Boundary check to prevent dirty result.
-	if (any(ThreadID + 1 >= float3(DimensionX, DimensionY, DimensionZ))) return;
-	
-	const uint LinearIndex = GetIndexByPoint(ThreadID);
-	
-	// Initialize current thread
-	if (LinearIndex == 0U)
+	// Boundary check
+	const uint CubeOffset = GetIndexByPoint(ThreadID);
+	BRANCH if (CubeOffset >= NumNonEmptyCubes)
 	{
-		TriangleCounter = 0U;
-	}
-	GroupMemoryBarrierWithGroupSync();
-
-	// Create Sampler
-	FVoxelVdbSampler Sampler = CreateVdbSampler(SrcVoxelData);
-	
-	// Sample points
-	FVoxelVdbValueWithGradient Samples[8];
-	for (uint i = 0; i < 8; ++i)
-	{
-		Samples[i] = SampleVoxelPointWithGradient(ThreadID + MCCubeVertex(i), Sampler);
+		return;
 	}
 
-	// Cube setup
-	uint CubeSetup = 0;
-	for (uint i = 0; i < 8; ++i)
+	const uint3 CoordBias[] = {
+		uint3(1, 0, 0),
+		uint3(0, 1, 0),
+		uint3(0, 0, 1),
+		uint3(0, 1, 1),
+		uint3(1, 0, 1),
+		uint3(1, 1, 0),
+	};
+
+	const int3 CorrespondEdges[] = {
+		int3(-1, 1, 9),
+		int3(2, -1, 11),
+		int3(4, 7, -1),
+		int3(6, -1, -1),
+		int3(-1, 5, -1),
+		int3(-1, -1, 10),
+	};
+
+	const uint3 Coord = GetIndexSpaceCoordByLinearId(InNonEmptyCubeLinearId[CubeOffset]);
+	const uint CubeIndex = InNonEmptyCubeIndex[CubeOffset];
+	const uint Edges = EdgeTable[CubeIndex];
+
+	const uint VertexIndexStart = InVertexIndexOffset[CubeOffset].x;
+	uint Indices[12];
+	uint VertexOffset = VertexIndexStart;
+	// Owned Edge
+	for (uint i = 0; i < sizeof(OwnedEdge) / sizeof(OwnedEdge[0]); ++i)
 	{
-		CubeSetup |= (Samples[i].Value < SurfaceIsoValue) << i;
-	}
-
-	// There is no triangle will be generated in these two setups
-	if (CubeSetup == 0 || CubeSetup == 255) return;
-
-	// Lerp points to get intersection point on the edge
-	float3 Vertices[12];
-	float3 Normals[12];
-	for (uint i = 0; i < 12; ++i)
-	{
-		uint2 Pair = uint2(EdgeVertexIndices[i][0], EdgeVertexIndices[i][1]);
-		FVoxelVdbValueWithGradient Sample1 = Samples[Pair.x];
-		FVoxelVdbValueWithGradient Sample2 = Samples[Pair.y];
-		float3 VertexIndexPos1 = ThreadID + MCCubeVertex(Pair.x);
-		float3 VertexIndexPos2 = ThreadID + MCCubeVertex(Pair.y);
-		float InterpretationAlpha = (SurfaceIsoValue - Sample1.Value) / (Sample2.Value - Sample1.Value);
-		Vertices[i] = lerp(VertexIndexPos1, VertexIndexPos2, InterpretationAlpha);
-		Normals[i] = -normalize(lerp(Sample1.Gradient, Sample2.Gradient, InterpretationAlpha));
-	}
-
-	// Write triangles
-	uint Triangles[16] = TriangleTable[CubeSetup];
-	// Only 5 triangles at max, per cube
-	for (uint i = 0; i < 5; ++i)
-	{
-		uint StripIndexStart = i * 3;
-		// TODO: this might be optimized using vertex count table?
-		if (Triangles[StripIndexStart] == 255U) break;
-
-		for (int j = 0; j < 3; ++j)
+		const uint Edge = OwnedEdge[i];
+		if (Edges & (1U << Edge))
 		{
-			float3 Pos1 = Vertices[Triangles[StripIndexStart + j + 0]];
-			float3 Pos2 = Vertices[Triangles[StripIndexStart + j + 1]];
-			float3 Pos3 = Vertices[Triangles[StripIndexStart + j + 2]];
-			WriteTriangle(Pos1, Pos2, Pos3);
+			Indices[Edge] = VertexOffset;
+			++VertexOffset;
 		}
 	}
+	
+	// Shared Edge
+	for (uint i = 0; i < sizeof(CoordBias) / sizeof(CoordBias[0]); ++i)
+	{
+		const uint3 BiasedCoord = Coord + CoordBias[i];
+		const uint BiasedCubeOffset = InCubeIndexOffsets[GetLinearIdByIndexSpaceCoord(BiasedCoord)];
+		if (BiasedCubeOffset != ~0U)
+		{
+			const uint BiasedCubeIndex = InNonEmptyCubeIndex[BiasedCubeOffset];
+			const uint BiasedEdges = EdgeTable[BiasedCubeIndex];
+
+			uint BiasedVertexIndex = InVertexIndexOffset[BiasedCubeOffset].x;
+			for (uint ei = 0; ei < sizeof(OwnedEdge) / sizeof(OwnedEdge[0]); ++ei)
+			{
+				if (BiasedEdges & (1U << OwnedEdge[ei]))
+				{
+					const int CorrespondingEdge = CorrespondEdges[i][ei];
+					if (CorrespondingEdge != -1)
+					{
+						Indices[CorrespondingEdge] = BiasedVertexIndex;
+					}
+					++BiasedVertexIndex;
+				}
+			}
+		}
+	}
+	
+	VertexOffset = VertexIndexStart;
+	FVoxelVdbSampler Sampler = CreateVdbSampler(SrcVoxelData);
+	for (uint i = 0; i < sizeof(OwnedEdge) / sizeof(OwnedEdge[0]); ++i)
+	{
+		const uint Edge = OwnedEdge[i];
+		if (Edges & (1U << Edge))
+		{
+			uint3 BeginCoord;
+			uint3 EndCoord;
+			switch (Edge)
+			{
+			case 0:
+				BeginCoord = Coord;
+				EndCoord = Coord + uint3(1, 0, 0);
+				break;
+			case 3:
+				BeginCoord = Coord + uint3(0, 1, 0);
+				EndCoord = Coord;
+				break;
+			case 8:
+			default:
+				BeginCoord = Coord;
+				EndCoord = Coord + uint3(0, 0, 1);
+				break;
+			}
+
+			const float BeginPointValue = SampleVoxelPoint(BeginCoord, Sampler);
+			const float EndPointValue = SampleVoxelPoint(EndCoord, Sampler);
+			const float3 VertexPosition = InterpolateVertex(BeginCoord, EndCoord, BeginPointValue, EndPointValue);
+			// TODO(darc): Calc normal using gradient
+			OutVertexBuffer[VertexOffset] = float4(VertexPosition / (VoxelSize - 1.f) - 0.5f, 0.0f);
+			++VertexOffset;
+		}
+	}
+	
+	const uint IndexBase = InVertexIndexOffset[CubeOffset].y;
+	const uint NumTriangles = TriangleNumTable[CubeIndex];
+	for (uint i = 0; i < NumTriangles; ++i)
+	{
+		OutIndexBuffer[IndexBase + i] = Indices[TriangleTable[CubeIndex][i]];
+	}
 }
-#endif

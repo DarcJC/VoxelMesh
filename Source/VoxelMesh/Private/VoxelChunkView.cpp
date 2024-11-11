@@ -16,7 +16,7 @@ UVoxelChunkView::UVoxelChunkView(const FObjectInitializer& ObjectInitializer)
 	DimensionX = 1;
 	DimensionY = 1;
 	DimensionZ = 1;
-	RenderTarget_Debug = ObjectInitializer.CreateDefaultSubobject<UTextureRenderTarget2D>(this, TEXT("DebugRenderTarget"));
+	RHIProxy = MakeShared<FVoxelChunkViewRHIProxy>();
 }
 
 UVoxelChunkView::~UVoxelChunkView()
@@ -25,12 +25,12 @@ UVoxelChunkView::~UVoxelChunkView()
 
 bool UVoxelChunkView::IsDirty() const
 {
-	return bRequireRebuild;
+	return RHIProxy.IsValid();
 }
 
 void UVoxelChunkView::MarkAsDirty()
 {
-	bRequireRebuild = true;
+	RHIProxy = MakeShared<FVoxelChunkViewRHIProxy>();
 }
 
 void UVoxelChunkView::SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer)
@@ -128,6 +128,11 @@ void UVoxelChunkView::TestDispatch()
 			TRefCountPtr<FRHIBuffer> VertexIndexOffsetBuffer = nullptr;
 			TRefCountPtr<FRHIUnorderedAccessView> VertexIndexOffsetBufferUAV = nullptr;
 			TRefCountPtr<FRHIShaderResourceView> VertexIndexOffsetBufferSRV = nullptr;
+
+			TRefCountPtr<FRHIUnorderedAccessView> MeshVertexBufferUAV = nullptr;
+			TRefCountPtr<FRHIUnorderedAccessView> MeshIndexBufferUAV = nullptr;
+
+			uint32 NumNonEmptyCubes = 0;
 		};
 		FVoxelDelayedResource* DelayedResource = GraphBuilder.AllocObject<FVoxelDelayedResource>();
 		
@@ -160,7 +165,7 @@ void UVoxelChunkView::TestDispatch()
 
 		FRDGPassRef PrefixSumResourceBindingPass = GraphBuilder.AddPass(RDG_EVENT_NAME("Voxel Marching Cubes Resource Binding"), ReadCounterParameter, ERDGPassFlags::Readback | ERDGPassFlags::NeverCull, [PrefixSumParameters, DelayedResource, TotalCubes, CounterBuffer] (FRHICommandListImmediate& RHICommandListLocal)
 		{
-			uint32 NumNonEmptyCubes = *(static_cast<uint32*>(RHICommandListLocal.LockBuffer(CounterBuffer->GetRHI(), 0, sizeof(uint32) * 4, RLM_ReadOnly)));
+			uint32 NumNonEmptyCubes = *(static_cast<uint32*>(RHICommandListLocal.LockBuffer(CounterBuffer->GetRHI(), 0, sizeof(uint32) * 1, RLM_ReadOnly)));
 			RHICommandListLocal.UnlockBuffer(CounterBuffer->GetRHI());
 			if (NumNonEmptyCubes == 0)
 			{
@@ -185,12 +190,47 @@ void UVoxelChunkView::TestDispatch()
 			PrefixSumParameters->OutNonEmptyCubeLinearId = DelayedResource->NonEmptyCubeLinearIdBufferUAV;
 			PrefixSumParameters->OutNonEmptyCubeIndex = DelayedResource->NonEmptyCubeIndexBufferUAV;
 			PrefixSumParameters->OutVertexIndexOffset = DelayedResource->VertexIndexOffsetBufferUAV;
+
+			DelayedResource->NumNonEmptyCubes = NumNonEmptyCubes;
 		});
 
 		FRDGPassRef PrefixSumPass = GraphBuilder.AddPass(RDG_EVENT_NAME("Voxel Marching Cubes Prefix Sum"), PrefixSumParameters, ERDGPassFlags::Compute | ERDGPassFlags::NeverCull, [TotalCubes, PrefixSumCSRef, PrefixSumParameters] (FRDGAsyncTask, FRHIComputeCommandList& RHICommandListLocal)
 		{
 			const FIntVector DispatchSize = GetDispatchSize(TotalCubes);
 			FComputeShaderUtils::Dispatch(RHICommandListLocal, PrefixSumCSRef, *PrefixSumParameters, DispatchSize);
+		});
+
+		/////////////////////////
+		/// Generate Mesh
+		/////////////////////////
+		TSharedRef<FVoxelChunkViewRHIProxy> Proxy = GetRHIProxy().ToSharedRef();
+		auto* GenerateMeshParameter = GraphBuilder.AllocParameters<FVoxelMarchingCubesGenerateMeshCS::FParameters>();
+		FRDGPassRef GenerateMeshResourceBindingPass = GraphBuilder.AddPass(RDG_EVENT_NAME("Voxel Generate Mesh Resource Binding"), ReadCounterParameter, ERDGPassFlags::Readback | ERDGPassFlags::NeverCull, [CounterBuffer, Proxy, GenerateMeshParameter, DelayedResource] (FRHICommandListImmediate& RHICommandListLocal)
+		{
+			const uint32* CounterPtr = static_cast<uint32*>(RHICommandListLocal.LockBuffer(CounterBuffer->GetRHI(), sizeof(uint32) * 1, sizeof(uint32) * 2, RLM_ReadOnly));
+			check(CounterPtr != nullptr);
+			
+			const uint32 NumVertices = FMath::Max(1U, *(CounterPtr + 0));
+			const uint32 NumIndices = FMath::Max(1U, *(CounterPtr + 1));
+
+			Proxy->ResizeBuffer_RenderThread(NumVertices * sizeof(FVector4f), NumIndices * sizeof(uint32));
+			
+			GenerateMeshParameter->NumNonEmptyCubes = DelayedResource->NumNonEmptyCubes;
+			GenerateMeshParameter->InNonEmptyCubeIndex = DelayedResource->NonEmptyCubeIndexBufferSRV;
+			GenerateMeshParameter->InNonEmptyCubeLinearId = DelayedResource->NonEmptyCubeLinearIdBufferSRV;
+			GenerateMeshParameter->InVertexIndexOffset = DelayedResource->VertexIndexOffsetBufferSRV;
+			GenerateMeshParameter->OutVertexBuffer = Proxy->MeshVertexBufferUAV;
+			GenerateMeshParameter->OutIndexBuffer = Proxy->MeshIndexBufferUAV;
+		});
+		
+		auto GenerateMeshCSRef = ShaderMap->GetShader<FVoxelMarchingCubesGenerateMeshCS>();
+		GenerateMeshParameter->MarchingCubeParameters = UniformParametersBuffer;
+		GenerateMeshParameter->SrcVoxelData = GridBufferSRV;
+		GenerateMeshParameter->InCubeIndexOffsets = CubeIndexOffsetBufferSRV;
+		FRDGPassRef GenerateMeshPass = GraphBuilder.AddPass(RDG_EVENT_NAME("Voxel Generate Mesh"), GenerateMeshParameter, ERDGPassFlags::Compute, [DelayedResource, Proxy, GenerateMeshCSRef, GenerateMeshParameter] (FRDGAsyncTask, FRHIComputeCommandList& RHICommandListLocal)
+		{
+			const FIntVector DispatchSize = GetDispatchSize(DelayedResource->NumNonEmptyCubes);
+			FComputeShaderUtils::Dispatch(RHICommandListLocal, GenerateMeshCSRef, *GenerateMeshParameter, DispatchSize);
 		});
 		
 		// End RenderDoc Capture
@@ -202,8 +242,15 @@ void UVoxelChunkView::TestDispatch()
 		GraphBuilder.AddPassDependency(BeginCapturePass, CalcPass);
 		GraphBuilder.AddPassDependency(CalcPass, PrefixSumResourceBindingPass);;
 		GraphBuilder.AddPassDependency(PrefixSumResourceBindingPass, PrefixSumPass);
-		GraphBuilder.AddPassDependency(PrefixSumPass, EndCapturePass);
+		GraphBuilder.AddPassDependency(PrefixSumPass, GenerateMeshResourceBindingPass);
+		GraphBuilder.AddPassDependency(GenerateMeshResourceBindingPass, GenerateMeshPass);
+		GraphBuilder.AddPassDependency(GenerateMeshPass, EndCapturePass);
 
 		GraphBuilder.Execute();
 	});
+}
+
+TSharedPtr<FVoxelChunkViewRHIProxy> UVoxelChunkView::GetRHIProxy()
+{
+	return RHIProxy;
 }

@@ -51,3 +51,24 @@ class VOXELMESH_API FVoxelMarchingCubesCalcCubeOffsetCS : public FGlobalShader
 		SHADER_PARAMETER_UAV(RWBuffer<uint32>, OutVertexIndexOffset)
 	END_SHADER_PARAMETER_STRUCT()
 };
+
+class VOXELMESH_API FVoxelMarchingCubesGenerateMeshCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FVoxelMarchingCubesGenerateMeshCS);
+	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesGenerateMeshCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
+		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
+		VOXEL_SHADER_PARAMETER_BUFFER_SRV(Buffer<uint32>, InCubeIndexOffsets)
+		// The creation of these resource will be delayed. So it don't managed by render graph.
+		SHADER_PARAMETER_SRV(Buffer<uint32>, InNonEmptyCubeLinearId)
+		SHADER_PARAMETER_SRV(Buffer<uint32>, InNonEmptyCubeIndex)
+		SHADER_PARAMETER_SRV(Buffer<uint32>, InVertexIndexOffset)
+		// RHIProxy is going to manage these resources.
+		SHADER_PARAMETER_UAV(RWBuffer<float4>, OutVertexBuffer)
+		SHADER_PARAMETER_UAV(RWBuffer<uint32>, OutIndexBuffer)
+
+		SHADER_PARAMETER(uint32, NumNonEmptyCubes)
+	END_SHADER_PARAMETER_STRUCT()
+};

@@ -9,6 +9,7 @@
 #include "VoxelChunkView.generated.h"
 
 class FVoxelMarchingCubesUniforms;
+struct FVoxelChunkViewRHIProxy;
 
 UCLASS(BlueprintType)
 class VOXELMESH_API UVoxelChunkView : public UObject
@@ -33,6 +34,8 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void TestDispatch();
 
+	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
 	uint32 DimensionX;
@@ -43,13 +46,40 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
 	uint32 DimensionZ;
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Category = "Voxel | Debug")
-	UTextureRenderTarget2D* RenderTarget_Debug;
-
 	nanovdb::GridHandle<nanovdb::HostBuffer> HostVdbBuffer;
 
 private:
-	bool bRequireRebuild = false;
-
+	TSharedPtr<FVoxelChunkViewRHIProxy> RHIProxy;
+	
 	friend class UVoxelRenderingWorldSubsystem;
+};
+
+struct FVoxelChunkViewRHIProxy
+{
+
+	void ResizeBuffer_RenderThread(uint32_t NewVBSize, uint32 NewIBSize)
+	{
+		check(IsInParallelRenderingThread());
+
+		FRHICommandList& RHICmdList = FRHICommandListImmediate::Get();;
+
+		if (!MeshVertexBuffer || MeshVertexBuffer->GetSize() != NewVBSize)
+		{
+			FRHIResourceCreateInfo BufferCreateInfo(TEXT("Voxel Vertex Buffer"));
+			MeshVertexBuffer = RHICmdList.CreateVertexBuffer(NewVBSize, EBufferUsageFlags::UnorderedAccess, BufferCreateInfo);
+			MeshVertexBufferUAV = RHICmdList.CreateUnorderedAccessView(MeshVertexBuffer, PF_R32G32B32A32_UINT);
+		}
+
+		if (!MeshIndexBuffer || MeshIndexBuffer->GetSize() != NewIBSize)
+		{
+			FRHIResourceCreateInfo BufferCreateInfo(TEXT("Voxel Index Buffer"));
+			MeshIndexBuffer = RHICmdList.CreateIndexBuffer(sizeof(uint32), NewIBSize, EBufferUsageFlags::UnorderedAccess, BufferCreateInfo);
+			MeshIndexBufferUAV = RHICmdList.CreateUnorderedAccessView(MeshIndexBuffer, PF_R32_UINT);
+		}
+	}
+	
+	TRefCountPtr<FRHIBuffer> MeshVertexBuffer;
+	TRefCountPtr<FRHIBuffer> MeshIndexBuffer;
+	TRefCountPtr<FRHIUnorderedAccessView> MeshVertexBufferUAV;
+	TRefCountPtr<FRHIUnorderedAccessView> MeshIndexBufferUAV;
 };
