@@ -52,34 +52,23 @@ private:
 	TSharedPtr<FVoxelChunkViewRHIProxy> RHIProxy;
 	
 	friend class UVoxelRenderingWorldSubsystem;
+	friend struct FVoxelChunkViewRHIProxy;
 };
 
 struct FVoxelChunkViewRHIProxy
 {
+	explicit FVoxelChunkViewRHIProxy(UVoxelChunkView* ChunkView);
 
-	void ResizeBuffer_RenderThread(uint32_t NewVBSize, uint32 NewIBSize)
-	{
-		check(IsInParallelRenderingThread());
+	void ResizeBuffer_RenderThread(uint32_t NewVBSize, uint32 NewIBSize);
+	void RegenerateMesh_RenderThread();
+	void RegenerateMesh_GameThread();
+	void RegenerateMesh();
 
-		FRHICommandList& RHICmdList = FRHICommandListImmediate::Get();;
-
-		if (!MeshVertexBuffer || MeshVertexBuffer->GetSize() != NewVBSize)
-		{
-			FRHIResourceCreateInfo BufferCreateInfo(TEXT("Voxel Vertex Buffer"));
-			MeshVertexBuffer = RHICmdList.CreateVertexBuffer(NewVBSize, EBufferUsageFlags::UnorderedAccess, BufferCreateInfo);
-			MeshVertexBufferUAV = RHICmdList.CreateUnorderedAccessView(MeshVertexBuffer, PF_R32G32B32A32_UINT);
-		}
-
-		if (!MeshIndexBuffer || MeshIndexBuffer->GetSize() != NewIBSize)
-		{
-			FRHIResourceCreateInfo BufferCreateInfo(TEXT("Voxel Index Buffer"));
-			MeshIndexBuffer = RHICmdList.CreateIndexBuffer(sizeof(uint32), NewIBSize, EBufferUsageFlags::UnorderedAccess, BufferCreateInfo);
-			MeshIndexBufferUAV = RHICmdList.CreateUnorderedAccessView(MeshIndexBuffer, PF_R32_UINT);
-		}
-	}
-	
 	TRefCountPtr<FRHIBuffer> MeshVertexBuffer;
 	TRefCountPtr<FRHIBuffer> MeshIndexBuffer;
 	TRefCountPtr<FRHIUnorderedAccessView> MeshVertexBufferUAV;
 	TRefCountPtr<FRHIUnorderedAccessView> MeshIndexBufferUAV;
+	TArray<uint8> VoxelDataBuffer;
+	uint32 VoxelSize;
+	std::atomic<bool> bIsReady;
 };
