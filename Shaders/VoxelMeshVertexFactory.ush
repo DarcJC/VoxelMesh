@@ -1,0 +1,34 @@
+﻿
+#include "/Engine/Private/VertexFactoryCommon.ush"
+
+struct FVertexFactoryInput
+{
+	// Float3
+	float3 Position;
+	// Packed float3
+	uint Normal;
+};
+
+struct FVertexFactoryInterpolantsVSToPS
+{
+	TANGENTTOWORLD_INTERPOLATOR_BLOCK
+};
+
+struct FVertexFactoryIntermediates
+{
+	float3 UnpackedNormal;
+};
+
+float3 UnpackNormal(FVertexFactoryInput Input)
+{
+	return float3(0, 0, 1);
+}
+
+FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput Input)
+{
+	FVertexFactoryIntermediates Intermediates;
+
+	Intermediates.UnpackedNormal = UnpackNormal(Input);
+
+	return Intermediates;
+}

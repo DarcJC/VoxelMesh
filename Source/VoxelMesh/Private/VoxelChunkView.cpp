@@ -12,12 +12,14 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "nanovdb/io/IO.h"
 
+DECLARE_GPU_STAT_NAMED(FVoxelMeshGeneration, TEXT("Voxel.Mesh.Generation"));
+
 UVoxelChunkView::UVoxelChunkView(const FObjectInitializer& ObjectInitializer)
 {
 	DimensionX = 1;
 	DimensionY = 1;
 	DimensionZ = 1;
-	RHIProxy = MakeShared<FVoxelChunkViewRHIProxy>(this);
+	RHIProxy = nullptr;
 }
 
 UVoxelChunkView::~UVoxelChunkView()
@@ -26,13 +28,17 @@ UVoxelChunkView::~UVoxelChunkView()
 
 bool UVoxelChunkView::IsDirty() const
 {
-	return RHIProxy->bIsReady.load(std::memory_order_acquire);
+	return RHIProxy.IsValid() && RHIProxy->bIsReady.load(std::memory_order_acquire);
+}
+
+bool UVoxelChunkView::IsEmpty() const
+{
+	return HostVdbBuffer.isEmpty();
 }
 
 void UVoxelChunkView::MarkAsDirty()
 {
 	RHIProxy = MakeShared<FVoxelChunkViewRHIProxy>(this);
-	RHIProxy->RegenerateMesh();
 }
 
 void UVoxelChunkView::SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer)
@@ -96,6 +102,11 @@ void UVoxelChunkView::TestDispatch()
 {
 }
 
+void UVoxelChunkView::RebuildMesh()
+{
+	GetRHIProxy()->RegenerateMesh();
+}
+
 TSharedPtr<FVoxelChunkViewRHIProxy> UVoxelChunkView::GetRHIProxy()
 {
 	return RHIProxy;
@@ -134,13 +145,16 @@ void FVoxelChunkViewRHIProxy::ResizeBuffer_RenderThread(uint32_t NewVBSize, uint
 	}
 }
 
-#define VOXELMESH_ENABLE_COMPUTE_DEBUG 1
+#define VOXELMESH_ENABLE_COMPUTE_DEBUG 0
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread()
 {
 	FRHICommandListImmediate& RHICmdList = FRHICommandListImmediate::Get();
 	
 	FRDGBuilder GraphBuilder(RHICmdList);
+	RDG_EVENT_SCOPE_STAT(GraphBuilder, FVoxelMeshGeneration, "Voxel.Mesh.Generation");
+	RDG_GPU_STAT_SCOPE(GraphBuilder, FVoxelMeshGeneration);
+	
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	check(ShaderMap);
 

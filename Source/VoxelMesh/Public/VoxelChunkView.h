@@ -25,25 +25,30 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure)
 	bool IsDirty() const;
 
+	UFUNCTION(BlueprintCallable, BlueprintPure)
+	bool IsEmpty() const;
+
+	UFUNCTION(BlueprintCallable)
+	void TestDispatch();
+
+	void RebuildMesh();
+
+	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
+
 	void MarkAsDirty();
 
 	void SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer);
 
 	virtual void Serialize(FArchive& Ar) override;
 
-	UFUNCTION(BlueprintCallable)
-	void TestDispatch();
-
-	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
-
 protected:
-	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
+	UPROPERTY(VisibleAnywhere, Category = "Voxel | Debug")
 	uint32 DimensionX;
 	
-	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
+	UPROPERTY(VisibleAnywhere, Category = "Voxel | Debug")
 	uint32 DimensionY;
 	
-	UPROPERTY(VisibleAnywhere, Category = "Voxel | Property")
+	UPROPERTY(VisibleAnywhere, Category = "Voxel | Debug")
 	uint32 DimensionZ;
 
 	nanovdb::GridHandle<nanovdb::HostBuffer> HostVdbBuffer;
