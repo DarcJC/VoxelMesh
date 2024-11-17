@@ -43,7 +43,6 @@ void UVoxelChunkView::MarkAsDirty()
 
 void UVoxelChunkView::SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer)
 {
-	MarkAsDirty();
 	HostVdbBuffer = MoveTemp(NewBuffer);
 	if (HostVdbBuffer)
 	{
@@ -61,6 +60,7 @@ void UVoxelChunkView::SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostB
 		DimensionY = 0;
 		DimensionZ = 0;
 	}
+	MarkAsDirty();
 }
 
 void UVoxelChunkView::Serialize(FArchive& Ar)
@@ -71,8 +71,6 @@ void UVoxelChunkView::Serialize(FArchive& Ar)
 
 	if (Ar.IsLoading())
 	{
-		MarkAsDirty();
-
 		Ar << VoxelDataSize;
 
 		if (VoxelDataSize > 0)
@@ -82,7 +80,9 @@ void UVoxelChunkView::Serialize(FArchive& Ar)
 			Ar.Serialize(TempData.GetData(), VoxelDataSize);
 			nanovdb::HostBuffer HostBuffer = nanovdb::HostBuffer::createFull(TempData.NumBytes(), TempData.GetData());
 			HostVdbBuffer = nanovdb::GridHandle<nanovdb::HostBuffer>(MoveTemp(HostBuffer));
-		} 
+			
+			MarkAsDirty();
+		}
 	}
 	else if (Ar.IsSaving())
 	{

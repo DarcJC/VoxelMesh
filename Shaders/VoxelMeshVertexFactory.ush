@@ -1,22 +1,27 @@
 ﻿
 #include "/Engine/Private/VertexFactoryCommon.ush"
 
+// We should not include this header as it will be explicitly included in pass shaders.
+// Uncomment this just for coding only.
+// #include "/Engine/Private/MaterialTemplate.ush"
+
 struct FVertexFactoryInput
 {
 	// Float3
-	float3 Position;
+	float3 Position : ATTRIBUTE0;
 	// Packed float3
-	uint Normal;
+	uint Normal : ATTRIBUTE1;
 };
 
 struct FVertexFactoryInterpolantsVSToPS
 {
-	TANGENTTOWORLD_INTERPOLATOR_BLOCK
 };
 
 struct FVertexFactoryIntermediates
 {
+	FPrimitiveSceneData SceneData;
 	float3 UnpackedNormal;
+	bool bIsVisible;
 };
 
 float3 UnpackNormal(FVertexFactoryInput Input)
@@ -28,7 +33,116 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 {
 	FVertexFactoryIntermediates Intermediates;
 
+	Intermediates.SceneData = GetPrimitiveDataFromUniformBuffer();
 	Intermediates.UnpackedNormal = UnpackNormal(Input);
+	Intermediates.bIsVisible = true;
 
 	return Intermediates;
+}
+
+FPrimitiveSceneData GetSceneData(FVertexFactoryIntermediates Intermediates)
+{
+	return Intermediates.SceneData;
+}
+
+/// @return translated world position
+float4 VertexFactoryGetWorldPosition(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)
+{
+	FDFMatrix LocalToWorld = GetSceneData(Intermediates).LocalToWorld;
+	float4 WorldPos = TransformLocalToTranslatedWorld(Input.Position.xyz, LocalToWorld);
+	return WorldPos * Intermediates.bIsVisible;
+}
+
+/// We don't have TBN matrix yet. So identical matrix will be returned here.
+half3x3 VertexFactoryGetTangentToLocal( FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates )
+{
+	float3x3 Result = {
+    		{ 1.f, 0.f, 0.f },
+    		{ 0.f, 1.f, 0.f },
+    		{ 0.f, 0.f, 1.f },
+    	};
+	return Result;
+}
+
+/// Same as world position here.
+float4 VertexFactoryGetRasterizedWorldPosition(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates, float4 InWorldPosition)
+{
+	return InWorldPosition;
+}
+
+// @return previous translated world position
+float4 VertexFactoryGetPreviousWorldPosition(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)
+{
+	return VertexFactoryGetWorldPosition(Input, Intermediates);
+}
+
+FMaterialVertexParameters GetMaterialVertexParameters(
+	FVertexFactoryInput Input, 
+	FVertexFactoryIntermediates Intermediates, 
+	float3 WorldPosition, 
+	half3x3 TangentToLocal,
+	bool bIsPreviousFrame = false)
+{
+	FMaterialVertexParameters MaterialVertexParameters;
+
+	MaterialVertexParameters.WorldPosition = WorldPosition;
+	MaterialVertexParameters.SceneData.Primitive = GetSceneData(Intermediates);
+	MaterialVertexParameters.TangentToWorld = TangentToLocal;
+	MaterialVertexParameters.PrimitiveId = 0;
+
+	return MaterialVertexParameters;
+}
+
+
+FVertexFactoryInterpolantsVSToPS VertexFactoryGetInterpolantsVSToPS(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates, FMaterialVertexParameters VertexParameters)
+{
+	FVertexFactoryInterpolantsVSToPS Interpolants;
+
+	// Initialize the whole struct to 0
+	// Really only the last two components of the packed UVs have the opportunity to be uninitialized
+	Interpolants = (FVertexFactoryInterpolantsVSToPS)0;
+
+	return Interpolants;
+}
+
+FMaterialPixelParameters GetMaterialPixelParameters(FVertexFactoryInterpolantsVSToPS Interpolants, float4 SvPosition)
+{
+	// GetMaterialPixelParameters is responsible for fully initializing the result
+	FMaterialPixelParameters Result = MakeInitializedMaterialPixelParameters();
+
+	Result.VertexColor = 1;
+	Result.UnMirrored = 1;
+	Result.TwoSidedSign = 1;
+
+	return Result;
+}
+
+#if NEEDS_LIGHTMAP_COORDINATE
+void GetLightMapCoordinates(FVertexFactoryInterpolantsVSToPS Interpolants, out float2 LightmapUV0, out float2 LightmapUV1, out uint LightmapDataIndex)
+{
+	LightmapUV0 = 0;
+	LightmapUV1 = 0;
+	LightmapDataIndex = 0;
+}
+
+void GetShadowMapCoordinate(FVertexFactoryInterpolantsVSToPS Interpolants, out float2 ShadowMapCoordinate, out uint LightmapDataIndex)
+{
+	ShadowMapCoordinate = 0;
+	LightmapDataIndex = 0;
+}
+#endif
+
+float3 VertexFactoryGetWorldNormal(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)
+{
+	return Intermediates.UnpackedNormal;
+}
+
+uint VertexFactoryGetViewIndex(FVertexFactoryIntermediates Intermediates)
+{
+	return 0;
+}
+
+uint VertexFactoryGetInstanceIdLoadIndex(FVertexFactoryIntermediates Intermediates)
+{
+	return 0;
 }
