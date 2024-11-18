@@ -16,7 +16,7 @@ UVoxelMeshProxyComponent::UVoxelMeshProxyComponent(const FObjectInitializer& Obj
 
 bool UVoxelMeshProxyComponent::ShouldCreateRenderState() const
 {
-	return IsValid(ChunkViewAsset) && !ChunkViewAsset->IsEmpty();
+	return IsValid(ChunkViewAsset) && !ChunkViewAsset->IsEmpty() && ChunkViewAsset->GetRHIProxy().IsValid() && ChunkViewAsset->GetRHIProxy()->IsReady();
 }
 
 void UVoxelMeshProxyComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
@@ -39,7 +39,6 @@ FVoxelChunkPrimitiveSceneProxy::FVoxelChunkPrimitiveSceneProxy(UVoxelMeshProxyCo
 	, VertexFactory(GMaxRHIFeatureLevel)
 {
 	check(IsValid(VoxelMeshProxyComponent->ChunkViewAsset));
-	check(IsInParallelRenderingThread());
 	TSharedPtr<FVoxelChunkViewRHIProxy> RHIProxy = VoxelMeshProxyComponent->ChunkViewAsset->GetRHIProxy();
 	NumVertices = RHIProxy->MeshVertexBuffer->GetSize() / sizeof(FVector4f);
 	NumPrimitives = RHIProxy->MeshIndexBuffer->GetSize() / sizeof(FUintVector3);
@@ -134,7 +133,6 @@ FVoxelMeshVertexFactory::FVoxelMeshVertexFactory(ERHIFeatureLevel::Type InFeatur
 
 FVoxelMeshVertexFactory::~FVoxelMeshVertexFactory()
 {
-	check(IsInRenderingThread());
 	ReleaseResource();
 }
 

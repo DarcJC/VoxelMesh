@@ -31,7 +31,7 @@ public:
 	// End UPrimitiveComponent interface
 
 protected:
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Voxel)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Voxel)
 	TObjectPtr<UVoxelChunkView> ChunkViewAsset;
 
 	friend struct FVoxelChunkPrimitiveSceneProxy;

@@ -28,7 +28,7 @@ UVoxelChunkView::~UVoxelChunkView()
 
 bool UVoxelChunkView::IsDirty() const
 {
-	return RHIProxy.IsValid() && RHIProxy->bIsReady.load(std::memory_order_acquire);
+	return RHIProxy.IsValid();
 }
 
 bool UVoxelChunkView::IsEmpty() const
@@ -126,14 +126,13 @@ void FVoxelChunkViewRHIProxy::ResizeBuffer_RenderThread(uint32_t NewVBSize, uint
 {
 	check(IsInParallelRenderingThread());
 
-	FRHICommandList& RHICmdList = FRHICommandListImmediate::Get();;
+	FRHICommandList& RHICmdList = FRHICommandListImmediate::Get();
 
 	if (!MeshVertexBuffer || MeshVertexBuffer->GetSize() != NewVBSize)
 	{
 		FRHIResourceCreateInfo BufferCreateInfo(TEXT("Voxel Vertex Buffer"));
 		MeshVertexBuffer = RHICmdList.CreateVertexBuffer(NewVBSize, EBufferUsageFlags::UnorderedAccess, BufferCreateInfo);
 		MeshVertexBufferUAV = RHICmdList.CreateUnorderedAccessView(MeshVertexBuffer, PF_R32G32B32A32_UINT);
-		bIsReady.store(true, std::memory_order_release);
 	}
 
 	if (!MeshIndexBuffer || MeshIndexBuffer->GetSize() != NewIBSize)
@@ -141,20 +140,19 @@ void FVoxelChunkViewRHIProxy::ResizeBuffer_RenderThread(uint32_t NewVBSize, uint
 		FRHIResourceCreateInfo BufferCreateInfo(TEXT("Voxel Index Buffer"));
 		MeshIndexBuffer = RHICmdList.CreateIndexBuffer(sizeof(uint32), NewIBSize, EBufferUsageFlags::UnorderedAccess, BufferCreateInfo);
 		MeshIndexBufferUAV = RHICmdList.CreateUnorderedAccessView(MeshIndexBuffer, PF_R32_UINT);
-		bIsReady.store(true, std::memory_order_release);
 	}
 }
 
 #define VOXELMESH_ENABLE_COMPUTE_DEBUG 0
 
-void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread()
+void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmediate& RHICmdList)
 {
-	FRHICommandListImmediate& RHICmdList = FRHICommandListImmediate::Get();
+	if (bool Expected = true; !bIsReady.compare_exchange_strong(Expected, false))
+	{
+		return;
+	}
 	
 	FRDGBuilder GraphBuilder(RHICmdList);
-	RDG_EVENT_SCOPE_STAT(GraphBuilder, FVoxelMeshGeneration, "Voxel.Mesh.Generation");
-	RDG_GPU_STAT_SCOPE(GraphBuilder, FVoxelMeshGeneration);
-	
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	check(ShaderMap);
 
@@ -295,6 +293,8 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread()
 		
 		const uint32 NumVertices = FMath::Max(1U, *(CounterPtr + 0));
 		const uint32 NumIndices = FMath::Max(1U, *(CounterPtr + 1));
+		
+		RHICommandListLocal.UnlockBuffer(CounterBuffer->GetRHI());
 
 		ResizeBuffer_RenderThread(NumVertices * sizeof(FVector4f), NumIndices * sizeof(uint32));
 		
@@ -338,20 +338,18 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread()
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh_GameThread()
 {
-	ENQUEUE_RENDER_COMMAND(VoxelMeshMarchingCubes)([this] (FRHICommandList&)
+	ENQUEUE_RENDER_COMMAND(VoxelMeshMarchingCubes)([this] (FRHICommandListImmediate& RHICmdList)
 	{
-		RegenerateMesh_RenderThread();
+		RegenerateMesh_RenderThread(RHICmdList);
 	});
 }
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh()
 {
-	if (IsInParallelRenderingThread())
-	{
-		RegenerateMesh_RenderThread();
-	}
-	else
-	{
-		RegenerateMesh_GameThread();
-	}
+	RegenerateMesh_GameThread();
+}
+
+bool FVoxelChunkViewRHIProxy::IsReady() const
+{
+	return MeshVertexBuffer && MeshIndexBuffer;
 }

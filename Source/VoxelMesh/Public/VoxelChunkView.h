@@ -31,6 +31,7 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void TestDispatch();
 
+	UFUNCTION(BlueprintCallable)
 	void RebuildMesh();
 
 	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
@@ -65,9 +66,11 @@ struct FVoxelChunkViewRHIProxy
 	explicit FVoxelChunkViewRHIProxy(UVoxelChunkView* ChunkView);
 
 	void ResizeBuffer_RenderThread(uint32_t NewVBSize, uint32 NewIBSize);
-	void RegenerateMesh_RenderThread();
+	void RegenerateMesh_RenderThread(FRHICommandListImmediate& RHICmdList);
 	void RegenerateMesh_GameThread();
 	void RegenerateMesh();
+
+	bool IsReady() const;
 
 	TRefCountPtr<FRHIBuffer> MeshVertexBuffer;
 	TRefCountPtr<FRHIBuffer> MeshIndexBuffer;
