@@ -19,8 +19,6 @@ class VOXELMESH_API UVoxelMeshProxyComponent : public UPrimitiveComponent
 	GENERATED_BODY()
 
 public:
-	UVoxelMeshProxyComponent(const FObjectInitializer& ObjectInitializer);
-
 	// Begin USceneComponent interface
 	virtual bool ShouldCreateRenderState() const override;
 	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
@@ -30,9 +28,14 @@ public:
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	// End UPrimitiveComponent interface
 
+	UFUNCTION(BlueprintCallable)
+	void UpdateChunkViewAsset(UVoxelChunkView* InAsset);
+
+	void OnVoxelMeshReady();
+
 protected:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Voxel)
-	TObjectPtr<UVoxelChunkView> ChunkViewAsset;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category=Voxel, meta = (ExposeOnSpawn))
+	UVoxelChunkView* ChunkViewAsset = nullptr;
 
 	friend struct FVoxelChunkPrimitiveSceneProxy;
 };

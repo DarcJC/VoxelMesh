@@ -9,14 +9,10 @@
 #include "Materials/MaterialRenderProxy.h"
 
 
-UVoxelMeshProxyComponent::UVoxelMeshProxyComponent(const FObjectInitializer& ObjectInitializer)
-	: ChunkViewAsset(nullptr)
-{
-}
-
 bool UVoxelMeshProxyComponent::ShouldCreateRenderState() const
 {
-	return IsValid(ChunkViewAsset) && !ChunkViewAsset->IsEmpty() && ChunkViewAsset->GetRHIProxy().IsValid() && ChunkViewAsset->GetRHIProxy()->IsReady();
+	const bool bIsCPUResourceValid = IsValid(ChunkViewAsset) && !ChunkViewAsset->IsEmpty();
+	return bIsCPUResourceValid;
 }
 
 void UVoxelMeshProxyComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
@@ -24,14 +20,49 @@ void UVoxelMeshProxyComponent::CreateRenderState_Concurrent(FRegisterComponentCo
 	Super::CreateRenderState_Concurrent(Context);
 
 	check(IsValid(ChunkViewAsset));
-
-	ChunkViewAsset->MarkAsDirty();
-	ChunkViewAsset->RebuildMesh();
 }
 
 FPrimitiveSceneProxy* UVoxelMeshProxyComponent::CreateSceneProxy()
 {
+	if (!ChunkViewAsset->GetRHIProxy().IsValid() || !ChunkViewAsset->GetRHIProxy()->IsReady())
+	{
+		if (ChunkViewAsset->GetRHIProxy() && !ChunkViewAsset->GetRHIProxy()->IsGenerating())
+		{
+			ChunkViewAsset->RebuildMesh();
+		}
+		return nullptr;
+	}
 	return new FVoxelChunkPrimitiveSceneProxy(this);
+}
+
+void UVoxelMeshProxyComponent::UpdateChunkViewAsset(UVoxelChunkView* InAsset)
+{
+	check(InAsset == nullptr || IsValid(InAsset));
+	if (UVoxelChunkView* OldView = ChunkViewAsset; IsValid(OldView))
+	{
+		OldView->OnBuildFinished.RemoveAll(this);
+	}
+	ChunkViewAsset = InAsset;
+	if (IsValid(ChunkViewAsset))
+	{
+		ChunkViewAsset->OnBuildFinished.AddUObject(this, &UVoxelMeshProxyComponent::OnVoxelMeshReady);
+	}
+	MarkRenderStateDirty();
+}
+
+void UVoxelMeshProxyComponent::OnVoxelMeshReady()
+{
+	if (IsInGameThread())
+	{
+		MarkRenderStateDirty();
+	}
+	else
+	{
+		AsyncTask(ENamedThreads::GameThread, [this]()
+		{
+			MarkRenderStateDirty();
+		});
+	}
 }
 
 FVoxelChunkPrimitiveSceneProxy::FVoxelChunkPrimitiveSceneProxy(UVoxelMeshProxyComponent* VoxelMeshProxyComponent)

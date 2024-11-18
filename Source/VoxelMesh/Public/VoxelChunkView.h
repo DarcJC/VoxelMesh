@@ -11,6 +11,8 @@
 class FVoxelMarchingCubesUniforms;
 struct FVoxelChunkViewRHIProxy;
 
+DECLARE_MULTICAST_DELEGATE(FVoxelChunkMeshBuildFinishedDelegate);
+
 UCLASS(BlueprintType)
 class VOXELMESH_API UVoxelChunkView : public UObject
 {
@@ -42,6 +44,8 @@ public:
 
 	virtual void Serialize(FArchive& Ar) override;
 
+	FVoxelChunkMeshBuildFinishedDelegate OnBuildFinished;
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Debug")
 	uint32 DimensionX;
@@ -71,7 +75,9 @@ struct FVoxelChunkViewRHIProxy
 	void RegenerateMesh();
 
 	bool IsReady() const;
+	bool IsGenerating() const;
 
+	TObjectPtr<UVoxelChunkView> Parent;
 	TRefCountPtr<FRHIBuffer> MeshVertexBuffer;
 	TRefCountPtr<FRHIBuffer> MeshIndexBuffer;
 	TRefCountPtr<FRHIUnorderedAccessView> MeshVertexBufferUAV;
