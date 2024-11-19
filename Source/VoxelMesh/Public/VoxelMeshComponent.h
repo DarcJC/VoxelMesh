@@ -22,6 +22,7 @@ public:
 	// Begin USceneComponent interface
 	virtual bool ShouldCreateRenderState() const override;
 	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
+	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	// End USceneComponent interface
 
 	// Begin UPrimitiveComponent interface
@@ -34,7 +35,7 @@ public:
 	void OnVoxelMeshReady();
 
 protected:
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category=Voxel, meta = (ExposeOnSpawn))
+	UPROPERTY(EditAnywhere, BlueprintSetter=UpdateChunkViewAsset, Category=Voxel, meta = (ExposeOnSpawn))
 	UVoxelChunkView* ChunkViewAsset = nullptr;
 
 	friend struct FVoxelChunkPrimitiveSceneProxy;
@@ -71,7 +72,7 @@ public:
 	* Get vertex elements used when during PSO precaching materials using this vertex factory type
 	*/
 	static VOXELMESH_API void GetPSOPrecacheVertexFetchElements(EVertexInputStreamType VertexInputStreamType, FVertexDeclarationElementList& Elements);
-
+	
 	// Begin FRenderResource interface.
 	VOXELMESH_API virtual void InitRHI(FRHICommandListBase& RHICmdList) override;
 	virtual void ReleaseResource() override final { FVertexFactory::ReleaseResource(); }
@@ -91,14 +92,20 @@ struct VOXELMESH_API FVoxelChunkPrimitiveSceneProxy final : public FPrimitiveSce
 	virtual SIZE_T GetTypeHash() const override;
 	virtual uint32 GetMemoryFootprint() const override;
 	virtual void CreateRenderThreadResources(FRHICommandListBase& RHICmdList) override;
+	virtual void DestroyRenderThreadResources() override;
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, class FMeshElementCollector& Collector) const override;
+	virtual FPrimitiveViewRelevance GetViewRelevance(const FSceneView* View) const override;
 	// End FPrimitiveSceneProxy interface
 
-	FVertexBuffer VertexBuffer;
-	FIndexBuffer IndexBuffer;
-	FVoxelMeshVertexFactory VertexFactory;
-	uint32 NumPrimitives;
-	uint32 NumVertices;
+	void TryInitialize() const;
+
+	mutable  FVertexBuffer VertexBuffer;
+	mutable  FIndexBuffer IndexBuffer;
+	mutable  FVoxelMeshVertexFactory VertexFactory;
+	mutable  uint32 NumPrimitives;
+	mutable uint32 NumVertices;
+	mutable UVoxelMeshProxyComponent* VoxelMeshProxyComponent;
+	mutable  bool bIsInitialized;
 };
 
 class FVoxelMeshVertexFactoryVertexShaderParameters : public FVertexFactoryShaderParameters

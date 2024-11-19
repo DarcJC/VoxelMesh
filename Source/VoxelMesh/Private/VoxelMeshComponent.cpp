@@ -20,18 +20,23 @@ void UVoxelMeshProxyComponent::CreateRenderState_Concurrent(FRegisterComponentCo
 	Super::CreateRenderState_Concurrent(Context);
 
 	check(IsValid(ChunkViewAsset));
-}
-
-FPrimitiveSceneProxy* UVoxelMeshProxyComponent::CreateSceneProxy()
-{
 	if (!ChunkViewAsset->GetRHIProxy().IsValid() || !ChunkViewAsset->GetRHIProxy()->IsReady())
 	{
 		if (ChunkViewAsset->GetRHIProxy() && !ChunkViewAsset->GetRHIProxy()->IsGenerating())
 		{
 			ChunkViewAsset->RebuildMesh();
 		}
-		return nullptr;
 	}
+}
+
+FBoxSphereBounds UVoxelMeshProxyComponent::CalcBounds(const FTransform& LocalToWorld) const
+{
+	const FBoxSphereBounds StaticBounds(FVector(0, 0, 0), FVector(30.f, 30.f, 30.f), 30.f);
+	return StaticBounds.TransformBy(LocalToWorld);
+}
+
+FPrimitiveSceneProxy* UVoxelMeshProxyComponent::CreateSceneProxy()
+{
 	return new FVoxelChunkPrimitiveSceneProxy(this);
 }
 
@@ -65,16 +70,14 @@ void UVoxelMeshProxyComponent::OnVoxelMeshReady()
 	}
 }
 
-FVoxelChunkPrimitiveSceneProxy::FVoxelChunkPrimitiveSceneProxy(UVoxelMeshProxyComponent* VoxelMeshProxyComponent)
-	: FPrimitiveSceneProxy(VoxelMeshProxyComponent)
+FVoxelChunkPrimitiveSceneProxy::FVoxelChunkPrimitiveSceneProxy(UVoxelMeshProxyComponent* InVoxelMeshProxyComponent)
+	: FPrimitiveSceneProxy(InVoxelMeshProxyComponent)
 	, VertexFactory(GMaxRHIFeatureLevel)
+	, VoxelMeshProxyComponent(InVoxelMeshProxyComponent)
+	, bIsInitialized(false)
 {
-	check(IsValid(VoxelMeshProxyComponent->ChunkViewAsset));
-	TSharedPtr<FVoxelChunkViewRHIProxy> RHIProxy = VoxelMeshProxyComponent->ChunkViewAsset->GetRHIProxy();
-	NumVertices = RHIProxy->MeshVertexBuffer->GetSize() / sizeof(FVector4f);
-	NumPrimitives = RHIProxy->MeshIndexBuffer->GetSize() / sizeof(FUintVector3);
-	VertexBuffer.SetRHI(RHIProxy->MeshVertexBuffer);
-	IndexBuffer.SetRHI(RHIProxy->MeshIndexBuffer);
+	check(IsValid(InVoxelMeshProxyComponent->ChunkViewAsset));
+	TryInitialize();
 }
 
 SIZE_T FVoxelChunkPrimitiveSceneProxy::GetTypeHash() const
@@ -90,13 +93,35 @@ uint32 FVoxelChunkPrimitiveSceneProxy::GetMemoryFootprint() const
 
 void FVoxelChunkPrimitiveSceneProxy::CreateRenderThreadResources(FRHICommandListBase& RHICmdList)
 {
-	VertexFactory.Data.PositionStream = FVertexStreamComponent(&VertexBuffer, 0, sizeof(FVector4f), VET_Float3);
-	VertexFactory.Data.NormalStream = FVertexStreamComponent(&VertexBuffer, sizeof(FVector3f), sizeof(uint32), VET_UInt);
+	TryInitialize();
+	if (bIsInitialized)
+	{
+		VertexFactory.Data.PositionStream = FVertexStreamComponent(&VertexBuffer, 0, sizeof(FVector4f), VET_Float3);
+		VertexFactory.Data.NormalStream = FVertexStreamComponent(&VertexBuffer, sizeof(FVector3f), sizeof(uint32), VET_UInt);
+		
+		VertexFactory.InitResource(RHICmdList);
+		VertexBuffer.InitResource(RHICmdList);
+		IndexBuffer.InitResource(RHICmdList);
+	}
+}
+
+void FVoxelChunkPrimitiveSceneProxy::DestroyRenderThreadResources()
+{
+	VertexFactory.ReleaseResource();
+	VertexBuffer.SetRHI(nullptr);
+	VertexBuffer.ReleaseResource();
+	IndexBuffer.SetRHI(nullptr);
+	IndexBuffer.ReleaseResource();
 }
 
 void FVoxelChunkPrimitiveSceneProxy::GetDynamicMeshElements(const TArray<const FSceneView*>& Views,
                                                             const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, class FMeshElementCollector& Collector) const
 {
+	if (!bIsInitialized)
+	{
+		return;
+	}
+	
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_FVoxelChunkPrimitiveSceneProxy_GetMeshElements);
 
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
@@ -108,6 +133,8 @@ void FVoxelChunkPrimitiveSceneProxy::GetDynamicMeshElements(const TArray<const F
 			const bool bIsWireframe = ViewSpecificFamily.EngineShowFlags.Wireframe;
 
 			FMeshBatch& MeshBatch = Collector.AllocateMesh();
+			
+			// FPrimitiveDrawInterface* PDI = Collector.GetPDI(ViewIndex);
 
 			FMaterialRenderProxy* MaterialProxy = nullptr;
 
@@ -153,7 +180,40 @@ void FVoxelChunkPrimitiveSceneProxy::GetDynamicMeshElements(const TArray<const F
 			BatchElement.FirstIndex = 0;
 			BatchElement.MinVertexIndex = 0;
 			BatchElement.MaxVertexIndex = NumVertices - 1;
+
+			Collector.AddMesh(ViewIndex, MeshBatch);
+			// PDI->DrawMesh(MeshBatch);
 		}
+	}
+}
+
+FPrimitiveViewRelevance FVoxelChunkPrimitiveSceneProxy::GetViewRelevance(const FSceneView* View) const
+{
+	if (!bIsInitialized)
+	{
+		TryInitialize();
+	}
+	
+	FPrimitiveViewRelevance ViewRelevance;
+	ViewRelevance.bDrawRelevance = IsShown(View) && bIsInitialized;
+	ViewRelevance.bDynamicRelevance = true;
+	return ViewRelevance;
+}
+
+void FVoxelChunkPrimitiveSceneProxy::TryInitialize() const
+{
+	TSharedPtr<FVoxelChunkViewRHIProxy> RHIProxy = VoxelMeshProxyComponent->ChunkViewAsset->GetRHIProxy();
+	if (RHIProxy->IsReady())
+	{
+		NumVertices = RHIProxy->MeshVertexBuffer->GetSize() / sizeof(FVector4f);
+		NumPrimitives = RHIProxy->MeshIndexBuffer->GetSize() / sizeof(FUintVector3);
+		VertexBuffer.SetRHI(RHIProxy->MeshVertexBuffer);
+		IndexBuffer.SetRHI(RHIProxy->MeshIndexBuffer);
+		bIsInitialized = true;
+	}
+	else
+	{
+		bIsInitialized = false;
 	}
 }
 

@@ -5,7 +5,7 @@
 #include "RHIStaticStates.h"
 #include "ShaderParameterStruct.h"
 
-#if 0
+#if 1
 #define VOXEL_SHADER_PARAMETER_BUFFER_SRV(...) SHADER_PARAMETER_SRV(__VA_ARGS__)
 #define VOXEL_SHADER_PARAMETER_BUFFER_UAV(...) SHADER_PARAMETER_UAV(__VA_ARGS__)
 #else
@@ -25,7 +25,7 @@ class VOXELMESH_API FVoxelMarchingCubesCalcCubeIndexCS : public FGlobalShader
 	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesCalcCubeIndexCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
+		SHADER_PARAMETER_STRUCT_REF(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
 		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, OutCubeIndexOffsets)
 		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, Counter)
@@ -41,7 +41,7 @@ class VOXELMESH_API FVoxelMarchingCubesCalcCubeOffsetCS : public FGlobalShader
 	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesCalcCubeOffsetCS, FGlobalShader);
 	
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
+		SHADER_PARAMETER_STRUCT_REF(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(Buffer<uint32>, InCubeIndexOffsets)
 		VOXEL_SHADER_PARAMETER_BUFFER_UAV(RWBuffer<uint32>, Counter)
@@ -58,7 +58,7 @@ class VOXELMESH_API FVoxelMarchingCubesGenerateMeshCS : public FGlobalShader
 	SHADER_USE_PARAMETER_STRUCT(FVoxelMarchingCubesGenerateMeshCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
+		SHADER_PARAMETER_STRUCT_REF(FVoxelMarchingCubeUniformParameters, MarchingCubeParameters)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(StructuredBuffer<uint32>, SrcVoxelData)
 		VOXEL_SHADER_PARAMETER_BUFFER_SRV(Buffer<uint32>, InCubeIndexOffsets)
 		// The creation of these resource will be delayed. So it don't managed by render graph.

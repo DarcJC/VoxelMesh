@@ -3,6 +3,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+
+#if WITH_EDITOR
+#include "AssetTypeActions_Base.h"
+#endif // WITH_EDITOR
+
 #include "UObject/Object.h"
 #include "VoxelRHIUtility.h"
 #include "VoxelVdbCommon.h"
@@ -13,7 +18,7 @@ struct FVoxelChunkViewRHIProxy;
 
 DECLARE_MULTICAST_DELEGATE(FVoxelChunkMeshBuildFinishedDelegate);
 
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, EditInlineNew)
 class VOXELMESH_API UVoxelChunkView : public UObject
 {
 	GENERATED_BODY()
@@ -86,3 +91,4 @@ struct FVoxelChunkViewRHIProxy
 	uint32 VoxelSize;
 	std::atomic<bool> bIsReady;
 };
+

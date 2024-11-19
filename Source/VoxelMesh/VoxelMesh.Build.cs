@@ -68,6 +68,8 @@ public class VoxelMesh : ModuleRules
             PrivateDependencyModuleNames.AddRange(
                 new string[]
                 {
+	                "UnrealEd",
+	                "AssetTools",
 				}
 				);
 		}
