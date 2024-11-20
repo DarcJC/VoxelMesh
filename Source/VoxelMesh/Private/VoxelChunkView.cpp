@@ -236,7 +236,7 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
 	FGPUFenceRHIRef Fence = RHICreateGPUFence(TEXT("Voxel Readback Fence"));
 	FComputeShaderUtils::Dispatch(RHICmdList, CalcCubeIndexCSRef, CalcCubeIndexParameters, GetDispatchSize(TotalCubes));
 	RHICmdList.WriteGPUFence(Fence);
-	RHICmdList.SubmitAndBlockUntilGPUIdle();
+	RHICmdList.ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
 
 	ENQUEUE_RENDER_COMMAND(VoxelChunkViewPrefixSum)([this, Fence, DelayedResource, ShaderMap, CounterBufferUAV, UniformParametersBuffer, GridBufferSRV, CubeIndexOffsetBufferSRV, GridBuffer, CubeIndexOffsetBuffer, CounterBuffer, TotalCubes] (FRHICommandListImmediate& RHICmdList) mutable 
 	{
@@ -287,7 +287,7 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
 			FComputeShaderUtils::Dispatch(RHICmdList, PrefixSumCSRef, PrefixSumParameters, DispatchSize);
 			RHICmdList.WriteGPUFence(Fence);
 		}
-		RHICmdList.SubmitAndBlockUntilGPUIdle();
+		RHICmdList.ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
 		
 		ENQUEUE_RENDER_COMMAND(VoxelGeneratingMesh)([this, Fence, DelayedResource, ShaderMap, CounterBufferUAV, UniformParametersBuffer, GridBufferSRV, CubeIndexOffsetBufferSRV, GridBuffer, CubeIndexOffsetBuffer, CounterBuffer, TotalCubes] (FRHICommandListImmediate& RHICmdList)
 		{
