@@ -36,9 +36,6 @@ public:
 	bool IsEmpty() const;
 
 	UFUNCTION(BlueprintCallable)
-	void TestDispatch();
-
-	UFUNCTION(BlueprintCallable)
 	void RebuildMesh();
 
 	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
@@ -47,9 +44,19 @@ public:
 
 	void SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer);
 
+	UFUNCTION(BlueprintSetter)
+	void UpdateSurfaceIsoValue(float NewValue);
+
 	virtual void Serialize(FArchive& Ar) override;
 
 	FVoxelChunkMeshBuildFinishedDelegate OnBuildFinished;
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif // WITH_EDITOR
+	
+	UPROPERTY(EditAnywhere, BlueprintSetter=UpdateSurfaceIsoValue, Category = "Voxel")
+	float SurfaceIsoValue = 0.0f;
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Debug")
@@ -63,6 +70,9 @@ protected:
 
 	nanovdb::GridHandle<nanovdb::HostBuffer> HostVdbBuffer;
 
+	UPROPERTY()
+	TArray<uint8> VdbBulkData;
+
 private:
 	TSharedPtr<FVoxelChunkViewRHIProxy> RHIProxy;
 	
@@ -72,7 +82,7 @@ private:
 
 struct FVoxelChunkViewRHIProxy
 {
-	explicit FVoxelChunkViewRHIProxy(UVoxelChunkView* ChunkView);
+	explicit FVoxelChunkViewRHIProxy(const UVoxelChunkView* ChunkView);
 
 	void ResizeBuffer_RenderThread(uint32_t NewVBSize, uint32 NewIBSize);
 	void RegenerateMesh_RenderThread(FRHICommandListImmediate& RHICmdList);
@@ -89,6 +99,7 @@ struct FVoxelChunkViewRHIProxy
 	TRefCountPtr<FRHIUnorderedAccessView> MeshIndexBufferUAV;
 	TArray<uint8> VoxelDataBuffer;
 	uint32 VoxelSize;
+	float SurfaceIsoValue = 0.0f;
 	std::atomic<bool> bIsReady;
 };
 

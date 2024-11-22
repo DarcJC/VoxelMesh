@@ -37,5 +37,5 @@ float ReadVdbValue(pnanovdb_coord_t IndexSpaceCoord, pnanovdb_buf_t Buf, pnanovd
 {
 	pnanovdb_uint32_t Level = 0;
 	pnanovdb_address_t Address = pnanovdb_readaccessor_get_value_address_and_level(GridType, Buf, Accessor, IndexSpaceCoord, Level);
-	return pnanovdb_root_fp16_read_float(Buf, Address, IndexSpaceCoord, Level);
+	return pnanovdb_root_fp4_read_float(Buf, Address, IndexSpaceCoord, Level);
 }

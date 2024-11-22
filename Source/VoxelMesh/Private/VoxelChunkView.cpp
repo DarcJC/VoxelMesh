@@ -21,7 +21,6 @@ UVoxelChunkView::UVoxelChunkView(const FObjectInitializer& ObjectInitializer)
 	DimensionY = 1;
 	DimensionZ = 1;
 	RHIProxy = nullptr;
-	SetVdbBuffer_GameThread(nanovdb::tools::createLevelSetSphere());
 }
 
 UVoxelChunkView::~UVoxelChunkView()
@@ -35,7 +34,7 @@ bool UVoxelChunkView::IsDirty() const
 
 bool UVoxelChunkView::IsEmpty() const
 {
-	return HostVdbBuffer.isEmpty();
+	return VdbBulkData.IsEmpty();
 }
 
 void UVoxelChunkView::MarkAsDirty()
@@ -45,10 +44,14 @@ void UVoxelChunkView::MarkAsDirty()
 
 void UVoxelChunkView::SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostBuffer>&& NewBuffer)
 {
-	HostVdbBuffer = MoveTemp(NewBuffer);
-	if (HostVdbBuffer)
+	if (NewBuffer)
 	{
-		const auto& Grid = HostVdbBuffer.grid<float>();
+		nanovdb::HostBuffer& Buffer = NewBuffer.buffer();
+		VdbBulkData.SetNumUninitialized(Buffer.size());
+		FMemory::Memcpy(VdbBulkData.GetData(), Buffer.data(), Buffer.size());
+		HostVdbBuffer = nanovdb::HostBuffer::createFull(VdbBulkData.NumBytes(), VdbBulkData.GetData());
+		
+		const auto& Grid = HostVdbBuffer.grid<nanovdb::Fp4>();
 		const auto& Bbox = Grid->indexBBox();
 		const auto& BboxMin = Bbox.min();
 		const auto& BboxMax = Bbox.max();
@@ -61,47 +64,45 @@ void UVoxelChunkView::SetVdbBuffer_GameThread(nanovdb::GridHandle<nanovdb::HostB
 		DimensionX = 0;
 		DimensionY = 0;
 		DimensionZ = 0;
+		HostVdbBuffer.reset();
+		VdbBulkData.Reset();
 	}
 	MarkAsDirty();
+}
+
+void UVoxelChunkView::UpdateSurfaceIsoValue(float NewValue)
+{
+	if (NewValue != SurfaceIsoValue)
+	{
+		SurfaceIsoValue = NewValue;
+		RebuildMesh();
+	}
 }
 
 void UVoxelChunkView::Serialize(FArchive& Ar)
 {
 	UObject::Serialize(Ar);
 	
-	uint64 VoxelDataSize = 0;
-	
 	if (Ar.IsLoading())
 	{
-		Ar << VoxelDataSize;
-		
-		if (VoxelDataSize > 0)
+		if (VdbBulkData.NumBytes() > 0)
 		{
-			TArray<uint8> TempData;
-			TempData.SetNumUninitialized(VoxelDataSize);
-			Ar.Serialize(TempData.GetData(), VoxelDataSize);
-			nanovdb::HostBuffer HostBuffer = nanovdb::HostBuffer::createFull(TempData.NumBytes(), TempData.GetData());
+			nanovdb::HostBuffer HostBuffer = nanovdb::HostBuffer::createFull(VdbBulkData.NumBytes(), VdbBulkData.GetData());
 			HostVdbBuffer = nanovdb::GridHandle<nanovdb::HostBuffer>(MoveTemp(HostBuffer));
 			
 			MarkAsDirty();
 		}
 	}
-	else if (Ar.IsSaving())
-	{
-		nanovdb::HostBuffer& Buffer = HostVdbBuffer.buffer();
-		VoxelDataSize = Buffer.size();
-		
-		Ar << VoxelDataSize;
-	
-		if (VoxelDataSize > 0)
-		{
-			Ar.Serialize(Buffer.data(), VoxelDataSize);
-		}
-	}
 }
 
-void UVoxelChunkView::TestDispatch()
+void UVoxelChunkView::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
+	UObject::PostEditChangeProperty(PropertyChangedEvent);
+	FName PropertyName = PropertyChangedEvent.GetMemberPropertyName();
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UVoxelChunkView, SurfaceIsoValue))
+	{
+		RebuildMesh();
+	}
 }
 
 void UVoxelChunkView::RebuildMesh()
@@ -114,17 +115,17 @@ TSharedPtr<FVoxelChunkViewRHIProxy> UVoxelChunkView::GetRHIProxy()
 	return RHIProxy;
 }
 
-FVoxelChunkViewRHIProxy::FVoxelChunkViewRHIProxy(UVoxelChunkView* ChunkView)
-	: Parent(ChunkView)
+FVoxelChunkViewRHIProxy::FVoxelChunkViewRHIProxy(const UVoxelChunkView* ChunkView)
+	: Parent(const_cast<UVoxelChunkView*>(ChunkView))
 	, VoxelSize(FMath::Max3(ChunkView->DimensionX, ChunkView->DimensionY, ChunkView->DimensionZ))
+	, SurfaceIsoValue(ChunkView->SurfaceIsoValue)
 	, bIsReady(true)
 {
-	check(ChunkView && !ChunkView->HostVdbBuffer.isEmpty());
+	check(IsValid(ChunkView) && !ChunkView->HostVdbBuffer.isEmpty());
 	// const nanovdb::HostBuffer& HostBuffer = ChunkView->HostVdbBuffer.buffer();
-	const nanovdb::NanoGrid<float>* GridData = ChunkView->HostVdbBuffer.grid<float>();
-	const uint64_t GridByteSize = ChunkView->HostVdbBuffer.size();
-	VoxelDataBuffer.SetNumUninitialized(GridByteSize / VoxelDataBuffer.GetTypeSize());
-	FMemory::Memcpy(VoxelDataBuffer.GetData(), GridData, GridByteSize);
+	// const nanovdb::NanoGrid<float>* GridData = ChunkView->HostVdbBuffer.grid<float>();
+	// const uint64_t GridByteSize = ChunkView->HostVdbBuffer.size();
+	VoxelDataBuffer = ChunkView->VdbBulkData;
 }
 
 void FVoxelChunkViewRHIProxy::ResizeBuffer_RenderThread(uint32_t NewVBSize, uint32 NewIBSize)
@@ -181,7 +182,7 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
 	// Uniform buffer
 	FVoxelMarchingCubeUniformParameters UniformParameters;
 	UniformParameters.VoxelSize = VoxelSize;
-	UniformParameters.SurfaceIsoValue = 0.f;
+	UniformParameters.SurfaceIsoValue = SurfaceIsoValue;
 	UniformParameters.TotalCubes = TotalCubes;
 	TUniformBufferRef<FVoxelMarchingCubeUniformParameters> UniformParametersBuffer = CreateUniformBufferImmediate(UniformParameters, UniformBuffer_SingleFrame);
 
@@ -339,6 +340,10 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh_GameThread()
 {
+	if (IsValid(Parent))
+	{
+		SurfaceIsoValue = Parent->SurfaceIsoValue;
+	}
 	ENQUEUE_RENDER_COMMAND(VoxelMeshMarchingCubes)([this] (FRHICommandListImmediate& RHICmdList)
 	{
 		RegenerateMesh_RenderThread(RHICmdList);

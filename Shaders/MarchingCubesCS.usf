@@ -154,7 +154,7 @@ inline uint CalcCubeIndex(uint3 IndexCoord, in out FVoxelVdbSampler Sampler)
 	return CubeIndex;
 }
 
-inline float3 InterpolateVertex(uint3 BeginPos, uint3 EndPos, float BeginValue, float EndValue)
+inline float3 InterpolateVertex(float3 BeginPos, float3 EndPos, float BeginValue, float EndValue)
 {
 	float3 Result;
 	if (BeginValue == EndValue)
@@ -163,7 +163,8 @@ inline float3 InterpolateVertex(uint3 BeginPos, uint3 EndPos, float BeginValue, 
 	}
 	else
 	{
-		Result = lerp(BeginPos, EndPos, (SurfaceIsoValue - BeginValue) / (EndValue - BeginValue));
+		const float t = (SurfaceIsoValue - BeginValue) / (EndValue - BeginValue);
+		Result = lerp(BeginPos, EndPos, t);
 	}
 	return Result;
 }
@@ -356,7 +357,7 @@ void MarchingCubeMeshGenerationCS(uint3 ThreadID: SV_DispatchThreadID)
 			const float EndPointValue = SampleVoxelPoint(EndCoord, Sampler);
 			const float3 VertexPosition = InterpolateVertex(BeginCoord, EndCoord, BeginPointValue, EndPointValue);
 			// TODO(darc): Calc normal using gradient
-			OutVertexBuffer[VertexOffset] = float4(VertexPosition / (VoxelSize - 1.f) - 0.5f, 0.0f);
+			OutVertexBuffer[VertexOffset] = float4( (VertexPosition / (VoxelSize - 1.f)) - 0.5f, 0.0f);
 			++VertexOffset;
 		}
 	}
