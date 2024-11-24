@@ -146,6 +146,7 @@ inline uint CalcCubeIndex(uint3 IndexCoord, in out FVoxelVdbSampler Sampler)
 	for (uint i = 0; i < sizeof(Samples) / sizeof(Samples[0]); ++i)
 	{
 		if (Samples[i] <= SurfaceIsoValue)
+		// if (abs(Samples[i] - SurfaceIsoValue) < 1.f)
 		{
 			CubeIndex |= 1U << i;
 		}
@@ -231,7 +232,7 @@ void CalcVertexAndIndexPrefixSumCS(uint3 ThreadID: SV_DispatchThreadID)
 	OutNonEmptyCubeIndex[CubeOffset] = CubeIndex;
 
 	// Calc there is how many indices in current cube
-	const uint NumIndices = TriangleNumTable[CubeIndex];
+	const uint NumIndices = TriangleNumTable[CubeIndex] * 3;
 
 	// How many vertices will be produced in this cube
 	uint Edges = EdgeTable[CubeIndex];
@@ -363,8 +364,8 @@ void MarchingCubeMeshGenerationCS(uint3 ThreadID: SV_DispatchThreadID)
 	}
 	
 	const uint IndexBase = InVertexIndexOffset[CubeOffset].y;
-	const uint NumTriangles = TriangleNumTable[CubeIndex];
-	for (uint i = 0; i < NumTriangles; ++i)
+	const uint NumIndices = TriangleNumTable[CubeIndex] * 3;
+	for (uint i = 0; i < NumIndices; ++i)
 	{
 		OutIndexBuffer[IndexBase + i] = Indices[TriangleTable[CubeIndex][i]];
 	}

@@ -8,15 +8,35 @@
 #include "VoxelChunkViewEditor.generated.h"
 
 UCLASS()
+class UVoxelDataCreationOptions : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere)
+	double VoxelSize = 1.0;
+};
+
+UCLASS()
 class VOXELMESHEDITOR_API UVoxelChunkViewFactory : public UFactory
 {
 	GENERATED_BODY()
 public:
-	UVoxelChunkViewFactory();
+	UVoxelChunkViewFactory(const FObjectInitializer& Initializer);
+
+	// Begin UObject interface
+	virtual void PostInitProperties() override;
+	// End UObject interface
 
 	// Begin UFactory interface
 	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
 	// End UFactory interface
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Mesh Editor")
+	UVoxelDataCreationOptions* VoxelDataCreationOptions;
+
+protected:
+	static bool ShowVoxelCreationDialog(UVoxelDataCreationOptions* OutOptions);
 };
 
 class VOXELMESHEDITOR_API FVoxelChunkAssetTypeActions : public FAssetTypeActions_Base

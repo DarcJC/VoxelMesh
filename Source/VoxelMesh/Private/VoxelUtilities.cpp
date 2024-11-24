@@ -7,7 +7,7 @@
 
 UVoxelChunkView* UVoxelUtilities::CreateSphereChunkView(UObject* Outer)
 {
-	nanovdb::GridHandle<nanovdb::HostBuffer> NewGrid = nanovdb::tools::createLevelSetSphere<nanovdb::Fp4, nanovdb::HostBuffer>(100.f, nanovdb::Vec3f(100.f), 1.0f);
+	nanovdb::GridHandle<nanovdb::HostBuffer> NewGrid = nanovdb::tools::createLevelSetSphere<nanovdb::Fp4, nanovdb::HostBuffer>(100.f, nanovdb::Vec3f(100.f), 5.0f);
 	UVoxelChunkView* ChunkView = NewObject<UVoxelChunkView>(Outer);
 	ChunkView->SetVdbBuffer_GameThread(MoveTemp(NewGrid));
 	return ChunkView;

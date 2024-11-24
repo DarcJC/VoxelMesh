@@ -24,6 +24,8 @@ public class VoxelMeshEditor : ModuleRules
                 "AssetTools",
                 "VoxelMesh",
                 "VoxelNanoVDB",
+                "MainFrame",
+                "PropertyEditor",
             }
         );
     }
