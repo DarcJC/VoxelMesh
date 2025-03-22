@@ -29,7 +29,52 @@ UObject* UVoxelChunkViewFactory::FactoryCreateNew(UClass* InClass, UObject* InPa
 	
 	ShowVoxelCreationDialog(VoxelDataCreationOptions);
 
-	nanovdb::GridHandle<nanovdb::HostBuffer> NewGrid = nanovdb::tools::createLevelSetSphere<nanovdb::Fp4, nanovdb::HostBuffer>(100.f, nanovdb::Vec3f(100.f), VoxelDataCreationOptions->VoxelSize);
+	// Convert FVector to nanovdb Vec3d for center
+	nanovdb::Vec3d Center(
+		VoxelDataCreationOptions->Center.X, 
+		VoxelDataCreationOptions->Center.Y, 
+		VoxelDataCreationOptions->Center.Z
+	);
+
+	// Initialize grid with default value
+	nanovdb::GridHandle<nanovdb::HostBuffer> NewGrid;
+
+	// Create appropriate grid based on selected type
+	switch (VoxelDataCreationOptions->GridType)
+	{
+	case EVoxelGridType::Sphere:
+		NewGrid = nanovdb::tools::createLevelSetSphere<nanovdb::Fp4, nanovdb::HostBuffer>(
+			VoxelDataCreationOptions->Radius,
+			nanovdb::Vec3f(Center), // Convert Vec3d to Vec3f if needed for this function
+			VoxelDataCreationOptions->VoxelSize);
+		break;
+		
+	case EVoxelGridType::Box:
+		NewGrid = nanovdb::tools::createLevelSetBox<nanovdb::Fp4, nanovdb::HostBuffer>(
+			VoxelDataCreationOptions->Width,
+			VoxelDataCreationOptions->Height,
+			VoxelDataCreationOptions->Depth,
+			Center,
+			VoxelDataCreationOptions->VoxelSize,
+			VoxelDataCreationOptions->HalfWidth);
+		break;
+		
+	case EVoxelGridType::Torus:
+		NewGrid = nanovdb::tools::createLevelSetTorus<nanovdb::Fp4, nanovdb::HostBuffer>(
+			VoxelDataCreationOptions->MajorRadius,
+			VoxelDataCreationOptions->MinorRadius,
+			nanovdb::Vec3f(Center), // Convert Vec3d to Vec3f if needed for this function
+			VoxelDataCreationOptions->VoxelSize);
+		break;
+		
+	case EVoxelGridType::Octahedron:
+		NewGrid = nanovdb::tools::createLevelSetOctahedron<nanovdb::Fp4, nanovdb::HostBuffer>(
+			VoxelDataCreationOptions->Radius,
+			nanovdb::Vec3f(Center), // Convert Vec3d to Vec3f if needed for this function
+			VoxelDataCreationOptions->VoxelSize);
+		break;
+	}
+
 	UVoxelChunkView* NewView = NewObject<UVoxelChunkView>(InParent, InClass, InName, Flags);
 	NewView->SetVdbBuffer_GameThread(MoveTemp(NewGrid));
 

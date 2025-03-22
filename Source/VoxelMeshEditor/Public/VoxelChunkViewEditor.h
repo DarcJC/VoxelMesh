@@ -7,14 +7,56 @@
 #include "UObject/Object.h"
 #include "VoxelChunkViewEditor.generated.h"
 
+UENUM()
+enum class EVoxelGridType : uint8
+{
+	Sphere UMETA(DisplayName = "Sphere"),
+	Box UMETA(DisplayName = "Box"),
+	Torus UMETA(DisplayName = "Torus"),
+	Octahedron UMETA(DisplayName = "Octahedron")
+};
+
 UCLASS()
 class UVoxelDataCreationOptions : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(EditAnywhere)
+	// Common parameters
+	UPROPERTY(EditAnywhere, Category = "Common")
+	EVoxelGridType GridType = EVoxelGridType::Sphere;
+	
+	UPROPERTY(EditAnywhere, Category = "Common")
 	double VoxelSize = 1.0;
+	
+	UPROPERTY(EditAnywhere, Category = "Common", meta = (ClampMin = "1.0"))
+	double Radius = 100.0;
+	
+	UPROPERTY(EditAnywhere, Category = "Common")
+	FVector Center = FVector(100.0f, 100.0f, 100.0f);
+
+	// Sphere specific parameters
+	// (uses common radius and center parameters)
+
+	// Box specific parameters
+	UPROPERTY(EditAnywhere, Category = "Box", meta = (EditCondition = "GridType == EVoxelGridType::Box", EditConditionHides, ClampMin = "1.0"))
+	double Width = 40.0;
+	
+	UPROPERTY(EditAnywhere, Category = "Box", meta = (EditCondition = "GridType == EVoxelGridType::Box", EditConditionHides, ClampMin = "1.0"))
+	double Height = 60.0;
+	
+	UPROPERTY(EditAnywhere, Category = "Box", meta = (EditCondition = "GridType == EVoxelGridType::Box", EditConditionHides, ClampMin = "1.0"))
+	double Depth = 100.0;
+	
+	UPROPERTY(EditAnywhere, Category = "Box", meta = (EditCondition = "GridType == EVoxelGridType::Box", EditConditionHides, ClampMin = "0.1"))
+	double HalfWidth = 3.0;
+
+	// Torus specific parameters
+	UPROPERTY(EditAnywhere, Category = "Torus", meta = (EditCondition = "GridType == EVoxelGridType::Torus", EditConditionHides, ClampMin = "1.0"))
+	double MajorRadius = 100.0;
+	
+	UPROPERTY(EditAnywhere, Category = "Torus", meta = (EditCondition = "GridType == EVoxelGridType::Torus", EditConditionHides, ClampMin = "1.0"))
+	double MinorRadius = 40.0;
 };
 
 UCLASS()
