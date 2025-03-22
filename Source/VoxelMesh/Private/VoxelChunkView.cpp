@@ -153,188 +153,173 @@ void FVoxelChunkViewRHIProxy::ResizeBuffer_RenderThread(uint32_t NewVBSize, uint
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmediate& RHICmdList)
 {
-	if (bool Expected = true; !bIsReady.compare_exchange_strong(Expected, false))
-	{
-		return;
-	}
-	SCOPED_GPU_STAT(RHICmdList, FVoxelMeshGeneration);
-	RHI_BREADCRUMB_EVENT(RHICmdList, "VoxelMeshGeneration");
-	
-	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-	check(ShaderMap);
+    if (bool Expected = true; !bIsReady.compare_exchange_strong(Expected, false))
+    {
+        return;
+    }
+    SCOPED_GPU_STAT(RHICmdList, FVoxelMeshGeneration);
+    RHI_BREADCRUMB_EVENT(RHICmdList, "VoxelMeshGeneration");
+    
+    FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+    check(ShaderMap);
 
-	const size_t TotalCubes = VoxelSize * VoxelSize * VoxelSize;
+    const size_t TotalCubes = VoxelSize * VoxelSize * VoxelSize;
 
 #if VOXELMESH_ENABLE_COMPUTE_DEBUG
-	// RenderDoc Capture
-	IRenderCaptureProvider::Get().BeginCapture(&RHICmdList, 0);
+    // RenderDoc Capture
+    IRenderCaptureProvider::Get().BeginCapture(&RHICmdList, 0);
 #endif
-	
-	// Atomic counter buffer
-	static constexpr uint32 DEFAULT_COUNTER_VALUES[] { 0, 0, 0, 0 };
-	FRHIResourceCreateInfo Desc(TEXT("VoxelMeshCounter"));
-	FBufferRHIRef CounterBuffer = RHICmdList.CreateBuffer(sizeof(DEFAULT_COUNTER_VALUES), EBufferUsageFlags::Static | EBufferUsageFlags::UnorderedAccess | EBufferUsageFlags::KeepCPUAccessible, 0, ERHIAccess::UAVMask, Desc);
-	uint32* StagingPtr = static_cast<uint32*>(RHICmdList.LockBuffer(CounterBuffer, 0, sizeof(DEFAULT_COUNTER_VALUES), RLM_WriteOnly));
-	FMemory::Memcpy(StagingPtr, DEFAULT_COUNTER_VALUES, sizeof(DEFAULT_COUNTER_VALUES));
-	RHICmdList.UnlockBuffer(CounterBuffer);
-	FUnorderedAccessViewRHIRef CounterBufferUAV = RHICmdList.CreateUnorderedAccessView(CounterBuffer, FRHIViewDesc::CreateBufferUAV().SetTypeFromBuffer(CounterBuffer).SetFormat(PF_R32_UINT));
+    
+    // Atomic counter buffer
+    static constexpr uint32 DEFAULT_COUNTER_VALUES[] { 0, 0, 0, 0 };
+    FRHIResourceCreateInfo Desc(TEXT("VoxelMeshCounter"));
+    FBufferRHIRef CounterBuffer = RHICmdList.CreateBuffer(sizeof(DEFAULT_COUNTER_VALUES), EBufferUsageFlags::Static | EBufferUsageFlags::UnorderedAccess | EBufferUsageFlags::KeepCPUAccessible, 0, ERHIAccess::UAVMask, Desc);
+    uint32* StagingPtr = static_cast<uint32*>(RHICmdList.LockBuffer(CounterBuffer, 0, sizeof(DEFAULT_COUNTER_VALUES), RLM_WriteOnly));
+    FMemory::Memcpy(StagingPtr, DEFAULT_COUNTER_VALUES, sizeof(DEFAULT_COUNTER_VALUES));
+    RHICmdList.UnlockBuffer(CounterBuffer);
+    FUnorderedAccessViewRHIRef CounterBufferUAV = RHICmdList.CreateUnorderedAccessView(CounterBuffer, FRHIViewDesc::CreateBufferUAV().SetTypeFromBuffer(CounterBuffer).SetFormat(PF_R32_UINT));
 
-	// Uniform buffer
-	FVoxelMarchingCubeUniformParameters UniformParameters;
-	UniformParameters.VoxelSize = VoxelSize;
-	UniformParameters.SurfaceIsoValue = SurfaceIsoValue;
-	UniformParameters.TotalCubes = TotalCubes;
-	TUniformBufferRef<FVoxelMarchingCubeUniformParameters> UniformParametersBuffer = CreateUniformBufferImmediate(UniformParameters, UniformBuffer_SingleFrame);
+    // Uniform buffer
+    FVoxelMarchingCubeUniformParameters UniformParameters;
+    UniformParameters.VoxelSize = VoxelSize;
+    UniformParameters.SurfaceIsoValue = SurfaceIsoValue;
+    UniformParameters.TotalCubes = TotalCubes;
+    TUniformBufferRef<FVoxelMarchingCubeUniformParameters> UniformParametersBuffer = CreateUniformBufferImmediate(UniformParameters, UniformBuffer_SingleFrame);
 
-	// Nanovdb data buffer
-	FRHIResourceCreateInfo UniformBufferCreateInfo(TEXT("VoxelMeshGridBuffer"));
-	FBufferRHIRef GridBuffer = RHICmdList.CreateStructuredBuffer(sizeof(uint32), VoxelDataBuffer.NumBytes(), EBufferUsageFlags::ShaderResource | EBufferUsageFlags::VertexBuffer, ERHIAccess::SRVMask, UniformBufferCreateInfo);
-	uint8* GridStagingPtr = static_cast<uint8*>(RHICmdList.LockBuffer(GridBuffer, 0, VoxelDataBuffer.NumBytes(), RLM_WriteOnly));
-	FMemory::Memcpy(GridStagingPtr, VoxelDataBuffer.GetData(), VoxelDataBuffer.NumBytes());
-	RHICmdList.UnlockBuffer(GridBuffer);
-	FShaderResourceViewRHIRef GridBufferSRV = RHICmdList.CreateShaderResourceView(GridBuffer, FRHIViewDesc::CreateBufferSRV().SetTypeFromBuffer(GridBuffer));
+    // Nanovdb data buffer
+    FRHIResourceCreateInfo UniformBufferCreateInfo(TEXT("VoxelMeshGridBuffer"));
+    FBufferRHIRef GridBuffer = RHICmdList.CreateStructuredBuffer(sizeof(uint32), VoxelDataBuffer.NumBytes(), EBufferUsageFlags::ShaderResource | EBufferUsageFlags::VertexBuffer, ERHIAccess::SRVMask, UniformBufferCreateInfo);
+    uint8* GridStagingPtr = static_cast<uint8*>(RHICmdList.LockBuffer(GridBuffer, 0, VoxelDataBuffer.NumBytes(), RLM_WriteOnly));
+    FMemory::Memcpy(GridStagingPtr, VoxelDataBuffer.GetData(), VoxelDataBuffer.NumBytes());
+    RHICmdList.UnlockBuffer(GridBuffer);
+    FShaderResourceViewRHIRef GridBufferSRV = RHICmdList.CreateShaderResourceView(GridBuffer, FRHIViewDesc::CreateBufferSRV().SetTypeFromBuffer(GridBuffer));
 
-	// Cube index offset buffer
-	FRDGBufferDesc CubeIndexOffsetBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), TotalCubes);
-	FRHIResourceCreateInfo IndexOffsetBufferCreateInfo(TEXT("VoxelMeshIndexOffsetBuffer"));
-	FBufferRHIRef CubeIndexOffsetBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * TotalCubes, EBufferUsageFlags::Static | EBufferUsageFlags::UnorderedAccess | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::VertexBuffer, 0, ERHIAccess::UAVMask, IndexOffsetBufferCreateInfo);
-	FShaderResourceViewRHIRef CubeIndexOffsetBufferSRV = RHICmdList.CreateShaderResourceView(CubeIndexOffsetBuffer, FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(PF_R32_UINT));
-	FUnorderedAccessViewRHIRef CubeIndexOffsetBufferUAV = RHICmdList.CreateUnorderedAccessView(CubeIndexOffsetBuffer, FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(PF_R32_UINT));
+    // Cube index offset buffer
+    FRDGBufferDesc CubeIndexOffsetBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), TotalCubes);
+    FRHIResourceCreateInfo IndexOffsetBufferCreateInfo(TEXT("VoxelMeshIndexOffsetBuffer"));
+    FBufferRHIRef CubeIndexOffsetBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * TotalCubes, EBufferUsageFlags::Static | EBufferUsageFlags::UnorderedAccess | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::VertexBuffer, 0, ERHIAccess::UAVMask, IndexOffsetBufferCreateInfo);
+    FShaderResourceViewRHIRef CubeIndexOffsetBufferSRV = RHICmdList.CreateShaderResourceView(CubeIndexOffsetBuffer, FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(PF_R32_UINT));
+    FUnorderedAccessViewRHIRef CubeIndexOffsetBufferUAV = RHICmdList.CreateUnorderedAccessView(CubeIndexOffsetBuffer, FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(PF_R32_UINT));
 
-	// We create these buffer later
-	struct FVoxelDelayedResource
-	{
-		TRefCountPtr<FRHIBuffer> NonEmptyCubeLinearIdBuffer = nullptr;
-		TRefCountPtr<FRHIUnorderedAccessView> NonEmptyCubeLinearIdBufferUAV = nullptr;
-		TRefCountPtr<FRHIShaderResourceView> NonEmptyCubeLinearIdBufferSRV = nullptr;
-		
-		TRefCountPtr<FRHIBuffer> NonEmptyCubeIndexBuffer = nullptr;
-		TRefCountPtr<FRHIUnorderedAccessView> NonEmptyCubeIndexBufferUAV = nullptr;
-		TRefCountPtr<FRHIShaderResourceView> NonEmptyCubeIndexBufferSRV = nullptr;
-		
-		TRefCountPtr<FRHIBuffer> VertexIndexOffsetBuffer = nullptr;
-		TRefCountPtr<FRHIUnorderedAccessView> VertexIndexOffsetBufferUAV = nullptr;
-		TRefCountPtr<FRHIShaderResourceView> VertexIndexOffsetBufferSRV = nullptr;
+    // Create resources for all three steps upfront to avoid waiting
+    struct FVoxelProcessingResources
+    {
+        TRefCountPtr<FRHIBuffer> NonEmptyCubeLinearIdBuffer = nullptr;
+        TRefCountPtr<FRHIUnorderedAccessView> NonEmptyCubeLinearIdBufferUAV = nullptr;
+        TRefCountPtr<FRHIShaderResourceView> NonEmptyCubeLinearIdBufferSRV = nullptr;
+        
+        TRefCountPtr<FRHIBuffer> NonEmptyCubeIndexBuffer = nullptr;
+        TRefCountPtr<FRHIUnorderedAccessView> NonEmptyCubeIndexBufferUAV = nullptr;
+        TRefCountPtr<FRHIShaderResourceView> NonEmptyCubeIndexBufferSRV = nullptr;
+        
+        TRefCountPtr<FRHIBuffer> VertexIndexOffsetBuffer = nullptr;
+        TRefCountPtr<FRHIUnorderedAccessView> VertexIndexOffsetBufferUAV = nullptr;
+        TRefCountPtr<FRHIShaderResourceView> VertexIndexOffsetBufferSRV = nullptr;
+        
+        uint32 EstimatedNonEmptyCubes = 0;
+    };
+    
+    // Estimate max resources needed for worst case (all cubes are non-empty)
+    FVoxelProcessingResources Resources;
+    Resources.EstimatedNonEmptyCubes = TotalCubes; // Worst case: all cubes are non-empty
+    
+    // Create all buffer resources upfront with max size estimates
+    FRHIResourceCreateInfo NonEmptyCubeLinearIdBufferInfo(TEXT("NonEmptyCube LinearId"));
+    Resources.NonEmptyCubeLinearIdBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * Resources.EstimatedNonEmptyCubes, 
+        EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, NonEmptyCubeLinearIdBufferInfo);
+    Resources.NonEmptyCubeLinearIdBufferSRV = RHICmdList.CreateShaderResourceView(Resources.NonEmptyCubeLinearIdBuffer, 
+        FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
+    Resources.NonEmptyCubeLinearIdBufferUAV = RHICmdList.CreateUnorderedAccessView(Resources.NonEmptyCubeLinearIdBuffer, 
+        FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
 
-		TRefCountPtr<FRHIUnorderedAccessView> MeshVertexBufferUAV = nullptr;
-		TRefCountPtr<FRHIUnorderedAccessView> MeshIndexBufferUAV = nullptr;
+    FRHIResourceCreateInfo NonEmptyCubeIndexBufferInfo(TEXT("NonEmptyCube CubeIndex"));
+    Resources.NonEmptyCubeIndexBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * Resources.EstimatedNonEmptyCubes, 
+        EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, NonEmptyCubeIndexBufferInfo);
+    Resources.NonEmptyCubeIndexBufferSRV = RHICmdList.CreateShaderResourceView(Resources.NonEmptyCubeIndexBuffer, 
+        FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
+    Resources.NonEmptyCubeIndexBufferUAV = RHICmdList.CreateUnorderedAccessView(Resources.NonEmptyCubeIndexBuffer, 
+        FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
 
-		uint32 NumNonEmptyCubes = 0;
-	};
-	FVoxelDelayedResource DelayedResource{};
-	
-	/////////////////////////
-	/// Calc Cube Index (Culling)
-	/////////////////////////
-	auto CalcCubeIndexCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
-	FVoxelMarchingCubesCalcCubeIndexCS::FParameters CalcCubeIndexParameters{};
+    FRHIResourceCreateInfo VertexIndexOffsetBufferInfo(TEXT("Vertex Index Offsets"));
+    Resources.VertexIndexOffsetBuffer = RHICmdList.CreateBuffer(2 * sizeof(uint32) * Resources.EstimatedNonEmptyCubes, 
+        EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, VertexIndexOffsetBufferInfo);
+    Resources.VertexIndexOffsetBufferSRV = RHICmdList.CreateShaderResourceView(Resources.VertexIndexOffsetBuffer, 
+        FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32G32_UINT));
+    Resources.VertexIndexOffsetBufferUAV = RHICmdList.CreateUnorderedAccessView(Resources.VertexIndexOffsetBuffer, 
+        FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32G32_UINT));
 
-	CalcCubeIndexParameters.Counter = CounterBufferUAV;
-	CalcCubeIndexParameters.MarchingCubeParameters = UniformParametersBuffer;
-	CalcCubeIndexParameters.SrcVoxelData = GridBufferSRV;
-	CalcCubeIndexParameters.OutCubeIndexOffsets = CubeIndexOffsetBufferUAV;
+    // Also estimate vertex and index buffers for worst case
+    const uint32 EstimatedMaxVertices = TotalCubes * 12; // Worst case: 12 vertices per cube
+    const uint32 EstimatedMaxIndices = TotalCubes * 15 * 3; // Worst case: 15 triangles per cube
+    
+    ResizeBuffer_RenderThread(EstimatedMaxVertices * sizeof(FVector4f), EstimatedMaxIndices * sizeof(uint32));
 
-	FGPUFenceRHIRef Fence = RHICreateGPUFence(TEXT("Voxel Readback Fence"));
-	FComputeShaderUtils::Dispatch(RHICmdList, CalcCubeIndexCSRef, CalcCubeIndexParameters, GetDispatchSize(TotalCubes));
-	RHICmdList.WriteGPUFence(Fence);
-	RHICmdList.ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
+    // Step 1: Calculate cube indices (with async continuation)
+    auto CalcCubeIndexCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
+    FVoxelMarchingCubesCalcCubeIndexCS::FParameters CalcCubeIndexParameters{};
 
-	ENQUEUE_RENDER_COMMAND(VoxelChunkViewPrefixSum)([this, Fence, DelayedResource, ShaderMap, CounterBufferUAV, UniformParametersBuffer, GridBufferSRV, CubeIndexOffsetBufferSRV, GridBuffer, CubeIndexOffsetBuffer, CounterBuffer, TotalCubes] (FRHICommandListImmediate& RHICmdList) mutable 
-	{
-		/////////////////////////
-		/// Prefix sum
-		/////////////////////////
-		auto PrefixSumCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeOffsetCS>();
-		FVoxelMarchingCubesCalcCubeOffsetCS::FParameters PrefixSumParameters{};
-		
-		PrefixSumParameters.Counter = CounterBufferUAV;
-		PrefixSumParameters.MarchingCubeParameters = UniformParametersBuffer;
-		PrefixSumParameters.SrcVoxelData = GridBufferSRV;
-		PrefixSumParameters.InCubeIndexOffsets = CubeIndexOffsetBufferSRV;
+    CalcCubeIndexParameters.Counter = CounterBufferUAV;
+    CalcCubeIndexParameters.MarchingCubeParameters = UniformParametersBuffer;
+    CalcCubeIndexParameters.SrcVoxelData = GridBufferSRV;
+    CalcCubeIndexParameters.OutCubeIndexOffsets = CubeIndexOffsetBufferUAV;
 
-		Fence->Wait(RHICmdList, FRHIGPUMask::All());
-		Fence->Clear();
-		uint32 NumNonEmptyCubes = *(static_cast<uint32*>(RHICmdList.LockBuffer(CounterBuffer, 0, sizeof(uint32) * 1, RLM_ReadOnly)));
-		RHICmdList.UnlockBuffer(CounterBuffer);
-		ensureMsgf(NumNonEmptyCubes != 0, TEXT("Empty SDF or this is a bug?"));
-		if (NumNonEmptyCubes == 0)
-		{
-			NumNonEmptyCubes = TotalCubes;
-		}
-		
-		FRHIResourceCreateInfo NonEmptyCubeLinearIdBufferInfo(TEXT("NonEmptyCube LinearId"));
-		DelayedResource.NonEmptyCubeLinearIdBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * NumNonEmptyCubes, EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, NonEmptyCubeLinearIdBufferInfo);
-		DelayedResource.NonEmptyCubeLinearIdBufferSRV = RHICmdList.CreateShaderResourceView(DelayedResource.NonEmptyCubeLinearIdBuffer, FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
-		DelayedResource.NonEmptyCubeLinearIdBufferUAV = RHICmdList.CreateUnorderedAccessView(DelayedResource.NonEmptyCubeLinearIdBuffer, FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
+    // No fence needed - we'll use UAV barriers instead
+    const FIntVector DispatchSize = GetDispatchSize(TotalCubes);
+    FComputeShaderUtils::Dispatch(RHICmdList, CalcCubeIndexCSRef, CalcCubeIndexParameters, DispatchSize);
+    
+    // Use a UAV barrier instead of a fence to ensure the previous dispatch is complete
+	RHICmdList.Transition(FRHITransitionInfo{CubeIndexOffsetBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
+	RHICmdList.Transition(FRHITransitionInfo{CounterBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
+    
+    // Step 2: Prefix Sum and resource preparation
+    auto PrefixSumCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeOffsetCS>();
+    FVoxelMarchingCubesCalcCubeOffsetCS::FParameters PrefixSumParameters{};
+    
+    PrefixSumParameters.Counter = CounterBufferUAV;
+    PrefixSumParameters.MarchingCubeParameters = UniformParametersBuffer;
+    PrefixSumParameters.SrcVoxelData = GridBufferSRV;
+    PrefixSumParameters.InCubeIndexOffsets = CubeIndexOffsetBufferSRV;
+    PrefixSumParameters.OutNonEmptyCubeLinearId = Resources.NonEmptyCubeLinearIdBufferUAV;
+    PrefixSumParameters.OutNonEmptyCubeIndex = Resources.NonEmptyCubeIndexBufferUAV;
+    PrefixSumParameters.OutVertexIndexOffset = Resources.VertexIndexOffsetBufferUAV;
 
-		FRHIResourceCreateInfo NonEmptyCubeIndexBufferInfo(TEXT("NonEmptyCube CubeIndex"));
-		DelayedResource.NonEmptyCubeIndexBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * NumNonEmptyCubes, EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, NonEmptyCubeIndexBufferInfo);
-		DelayedResource.NonEmptyCubeIndexBufferSRV = RHICmdList.CreateShaderResourceView(DelayedResource.NonEmptyCubeIndexBuffer, FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
-		DelayedResource.NonEmptyCubeIndexBufferUAV = RHICmdList.CreateUnorderedAccessView(DelayedResource.NonEmptyCubeIndexBuffer, FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
+    FComputeShaderUtils::Dispatch(RHICmdList, PrefixSumCSRef, PrefixSumParameters, DispatchSize);
+    
+    // Use UAV barriers instead of fences
+	RHICmdList.Transition(FRHITransitionInfo{Resources.NonEmptyCubeLinearIdBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
+	RHICmdList.Transition(FRHITransitionInfo{Resources.NonEmptyCubeIndexBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
+	RHICmdList.Transition(FRHITransitionInfo{Resources.VertexIndexOffsetBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
+	RHICmdList.Transition(FRHITransitionInfo{CounterBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
 
-		FRHIResourceCreateInfo VertexIndexOffsetBufferInfo(TEXT("Vertex Index Offsets"));
-		DelayedResource.VertexIndexOffsetBuffer = RHICmdList.CreateBuffer(2 * sizeof(uint32) * NumNonEmptyCubes, EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, VertexIndexOffsetBufferInfo);
-		DelayedResource.VertexIndexOffsetBufferSRV = RHICmdList.CreateShaderResourceView(DelayedResource.VertexIndexOffsetBuffer, FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32G32_UINT));
-		DelayedResource.VertexIndexOffsetBufferUAV = RHICmdList.CreateUnorderedAccessView(DelayedResource.VertexIndexOffsetBuffer, FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32G32_UINT));
-		
-		PrefixSumParameters.OutNonEmptyCubeLinearId = DelayedResource.NonEmptyCubeLinearIdBufferUAV;
-		PrefixSumParameters.OutNonEmptyCubeIndex = DelayedResource.NonEmptyCubeIndexBufferUAV;
-		PrefixSumParameters.OutVertexIndexOffset = DelayedResource.VertexIndexOffsetBufferUAV;
+    // Step 3: Generate Mesh
+    FVoxelMarchingCubesGenerateMeshCS::FParameters GenerateMeshParameter;
+    
+    // Don't need to read back counter for actual counts - shader can handle with atomics
+    GenerateMeshParameter.NumNonEmptyCubes = Resources.EstimatedNonEmptyCubes;
+    GenerateMeshParameter.InNonEmptyCubeIndex = Resources.NonEmptyCubeIndexBufferSRV;
+    GenerateMeshParameter.InNonEmptyCubeLinearId = Resources.NonEmptyCubeLinearIdBufferSRV;
+    GenerateMeshParameter.InVertexIndexOffset = Resources.VertexIndexOffsetBufferSRV;
+    GenerateMeshParameter.OutVertexBuffer = MeshVertexBufferUAV;
+    GenerateMeshParameter.OutIndexBuffer = MeshIndexBufferUAV;
+    GenerateMeshParameter.MarchingCubeParameters = UniformParametersBuffer;
+    GenerateMeshParameter.SrcVoxelData = GridBufferSRV;
+    GenerateMeshParameter.InCubeIndexOffsets = CubeIndexOffsetBufferSRV;
+    
+    auto GenerateMeshCSRef = ShaderMap->GetShader<FVoxelMarchingCubesGenerateMeshCS>();
+    FComputeShaderUtils::Dispatch(RHICmdList, GenerateMeshCSRef, GenerateMeshParameter, DispatchSize);
 
-		DelayedResource.NumNonEmptyCubes = NumNonEmptyCubes;
-
-		{
-			const FIntVector DispatchSize = GetDispatchSize(TotalCubes);
-			FComputeShaderUtils::Dispatch(RHICmdList, PrefixSumCSRef, PrefixSumParameters, DispatchSize);
-			RHICmdList.WriteGPUFence(Fence);
-		}
-		RHICmdList.ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
-		
-		ENQUEUE_RENDER_COMMAND(VoxelGeneratingMesh)([this, Fence, DelayedResource, ShaderMap, CounterBufferUAV, UniformParametersBuffer, GridBufferSRV, CubeIndexOffsetBufferSRV, GridBuffer, CubeIndexOffsetBuffer, CounterBuffer, TotalCubes] (FRHICommandListImmediate& RHICmdList)
-		{
-			/////////////////////////
-			/// Generate Mesh
-			/////////////////////////
-			FVoxelMarchingCubesGenerateMeshCS::FParameters GenerateMeshParameter;
-
-			Fence->Wait(RHICmdList, FRHIGPUMask::All());
-			const uint32* CounterPtr = static_cast<uint32*>(RHICmdList.LockBuffer(CounterBuffer, sizeof(uint32) * 1, sizeof(uint32) * 2, RLM_ReadOnly));
-			check(CounterPtr != nullptr);
-			
-			const uint32 NumVertices = FMath::Max(1U, *(CounterPtr + 0));
-			const uint32 NumIndices = FMath::Max(1U, *(CounterPtr + 1));
-			
-			RHICmdList.UnlockBuffer(CounterBuffer);
-
-			ResizeBuffer_RenderThread(NumVertices * sizeof(FVector4f), NumIndices * sizeof(uint32));
-			
-			GenerateMeshParameter.NumNonEmptyCubes = DelayedResource.NumNonEmptyCubes;
-			GenerateMeshParameter.InNonEmptyCubeIndex = DelayedResource.NonEmptyCubeIndexBufferSRV;
-			GenerateMeshParameter.InNonEmptyCubeLinearId = DelayedResource.NonEmptyCubeLinearIdBufferSRV;
-			GenerateMeshParameter.InVertexIndexOffset = DelayedResource.VertexIndexOffsetBufferSRV;
-			GenerateMeshParameter.OutVertexBuffer = MeshVertexBufferUAV;
-			GenerateMeshParameter.OutIndexBuffer = MeshIndexBufferUAV;
-			
-			auto GenerateMeshCSRef = ShaderMap->GetShader<FVoxelMarchingCubesGenerateMeshCS>();
-			GenerateMeshParameter.MarchingCubeParameters = UniformParametersBuffer;
-			GenerateMeshParameter.SrcVoxelData = GridBufferSRV;
-			GenerateMeshParameter.InCubeIndexOffsets = CubeIndexOffsetBufferSRV;
-
-			{
-				const FIntVector DispatchSize = GetDispatchSize(DelayedResource.NumNonEmptyCubes);
-				FComputeShaderUtils::Dispatch(RHICmdList, GenerateMeshCSRef, GenerateMeshParameter, DispatchSize);
-				if (const UVoxelChunkView* VoxelChunkView = Parent.Get())
-				{
-					VoxelChunkView->OnBuildFinished.Broadcast();
-				}
-				bIsReady.store(true, std::memory_order_release);
-			}
-		});
-	});
+    // Notify finished building after the final dispatch
+    ENQUEUE_RENDER_COMMAND(NotifyMeshReady)([this](FRHICommandListImmediate& RHICmdList) {
+        if (const UVoxelChunkView* VoxelChunkView = Parent.Get())
+        {
+            VoxelChunkView->OnBuildFinished.Broadcast();
+        }
+        bIsReady.store(true, std::memory_order_release);
+    });
 
 #if VOXELMESH_ENABLE_COMPUTE_DEBUG
-	// End RenderDoc Capture
-	IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
+    // End RenderDoc Capture
+    IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
 #endif
 }
 
