@@ -244,9 +244,9 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
         }
     };
     
-    // More realistic estimate: only allocate for ~25% of cubes initially, with min threshold
+    // TODO: More realistic estimate: only allocate for ~25% of cubes initially, with min threshold
     FVoxelProcessingResources Resources;
-    Resources.EstimatedNonEmptyCubes = FMath::Max<uint32>(TotalCubes / 2u, 1024u); // 50% estimate with minimum size
+    Resources.EstimatedNonEmptyCubes = FMath::Max<uint32>(TotalCubes, 1024u); // 50% estimate with minimum size
     
     // Create all buffer resources upfront with more realistic size estimates
     FRHIResourceCreateInfo NonEmptyCubeLinearIdBufferInfo(TEXT("NonEmptyCube LinearId"));
@@ -298,13 +298,7 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
         bIsReady.store(true, std::memory_order_release);
         return;
     }
-	
-	// Also estimate vertex and index buffers for worst case
-	const uint32 EstimatedMaxVertices = TotalCubes * 12; // Worst case: 12 vertices per cube
-	const uint32 EstimatedMaxIndices = TotalCubes * 15 * 3; // Worst case: 15 triangles per cube
-	
-	ResizeBuffer_RenderThread(EstimatedMaxVertices * sizeof(FVector4f), EstimatedMaxIndices * sizeof(uint32));
-
+    
     // Step 1: Calculate cube indices (with async continuation)
     auto CalcCubeIndexCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
     FVoxelMarchingCubesCalcCubeIndexCS::FParameters CalcCubeIndexParameters{};
@@ -314,7 +308,6 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
     CalcCubeIndexParameters.SrcVoxelData = GridBufferSRV;
     CalcCubeIndexParameters.OutCubeIndexOffsets = CubeIndexOffsetBufferUAV;
 
-    // No fence needed - we'll use UAV barriers instead
     const FIntVector DispatchSize = GetDispatchSize(TotalCubes);
     FComputeShaderUtils::Dispatch(RHICmdList, CalcCubeIndexCSRef, CalcCubeIndexParameters, DispatchSize);
     
@@ -342,10 +335,55 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
 	RHICmdList.Transition(FRHITransitionInfo{Resources.VertexIndexOffsetBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
 	RHICmdList.Transition(FRHITransitionInfo{CounterBufferUAV, ERHIAccess::UAVCompute, ERHIAccess::UAVCompute});
 
+    // Check if we should read back counter and allocate exact buffers (Memory Optimized mode)
+    if (Parent && Parent->GetGenerationMode() == EVoxelMeshGenerationMode::MemoryOptimized)
+    {
+        // Create a fence to ensure GPU work is complete before reading counter
+        FRHIGPUFence* Fence = RHICreateGPUFence(TEXT("VoxelMeshCounterReadbackFence"));
+        RHICmdList.EnqueueLambda([Fence](FRHICommandListImmediate& ImmCmdList)
+        {
+            ImmCmdList.WriteGPUFence(Fence);
+        });
+        
+        // Wait for GPU to finish
+        Fence->Wait(RHICmdList, FRHIGPUMask::All());
+        Fence->Clear();
+        
+        // Read counter buffer to get number of non-empty cubes
+        uint32 NumNonEmptyCubes = *(static_cast<uint32*>(RHICmdList.LockBuffer(CounterBuffer, 0, sizeof(uint32), RLM_ReadOnly)));
+        RHICmdList.UnlockBuffer(CounterBuffer);
+        
+        // Calculate required buffer sizes based on actual count
+        // In marching cubes, each cube can generate up to 5 triangles (15 indices) and 12 vertices in worst case
+        uint32 RequiredVertexCount = NumNonEmptyCubes * 12;
+        uint32 RequiredIndexCount = NumNonEmptyCubes * 15 * 3;
+        
+        // Create exact-sized buffers
+        ResizeBuffer_RenderThread(RequiredVertexCount * sizeof(FVector4f), RequiredIndexCount * sizeof(uint32));
+        
+        // Reset the counter for the final pass
+        RHICmdList.ClearUAVUint(CounterBufferUAV, FUintVector4(0, 0, 0, 0));
+        
+        // Update estimated count for the generate mesh pass
+        Resources.EstimatedNonEmptyCubes = NumNonEmptyCubes;
+        
+        UE_LOG(LogVoxelMesh, Log, TEXT("Memory optimized mode: Created buffers for %u non-empty cubes (%.2f%% of total)"), 
+               NumNonEmptyCubes, (float)NumNonEmptyCubes / (float)TotalCubes * 100.0f);
+    }
+    else
+    {
+        // Performance optimized mode - use maximum buffer sizes
+        uint32 EstimatedMaxVertices = TotalCubes * 12; // Worst case: 12 vertices per cube
+        uint32 EstimatedMaxIndices = TotalCubes * 15 * 3; // Worst case: 15 triangles (45 indices) per cube
+        
+        ResizeBuffer_RenderThread(EstimatedMaxVertices * sizeof(FVector4f), EstimatedMaxIndices * sizeof(uint32));
+        
+        UE_LOG(LogVoxelMesh, Log, TEXT("Performance optimized mode: Created maximum buffer size for %llu cubes"), TotalCubes);
+    }
+
     // Step 3: Generate Mesh
     FVoxelMarchingCubesGenerateMeshCS::FParameters GenerateMeshParameter;
     
-    // Don't need to read back counter for actual counts - shader can handle with atomics
     GenerateMeshParameter.NumNonEmptyCubes = Resources.EstimatedNonEmptyCubes;
     GenerateMeshParameter.InNonEmptyCubeIndex = Resources.NonEmptyCubeIndexBufferSRV;
     GenerateMeshParameter.InNonEmptyCubeLinearId = Resources.NonEmptyCubeLinearIdBufferSRV;

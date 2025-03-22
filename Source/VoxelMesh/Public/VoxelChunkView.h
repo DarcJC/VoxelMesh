@@ -18,6 +18,17 @@ struct FVoxelChunkViewRHIProxy;
 
 DECLARE_MULTICAST_DELEGATE(FVoxelChunkMeshBuildFinishedDelegate);
 
+// Mesh generation modes
+UENUM(BlueprintType)
+enum class EVoxelMeshGenerationMode : uint8
+{
+	// Always allocate maximum buffer size (faster, uses more memory)
+	PerformanceOptimized UMETA(DisplayName = "Performance Optimized"),
+	
+	// Read counter buffer to allocate exact buffer size (slower, saves memory)
+	MemoryOptimized UMETA(DisplayName = "Memory Optimized")
+};
+
 UCLASS(BlueprintType, EditInlineNew)
 class VOXELMESH_API UVoxelChunkView : public UObject
 {
@@ -57,6 +68,14 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintSetter=UpdateSurfaceIsoValue, Category = "Voxel")
 	float SurfaceIsoValue = 0.0f;
+
+	/** The mesh generation mode to use */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel")
+	EVoxelMeshGenerationMode MeshGenerationMode = EVoxelMeshGenerationMode::PerformanceOptimized;
+	
+	/** Get the current mesh generation mode */
+	UFUNCTION(BlueprintCallable, Category = "Voxel")
+	EVoxelMeshGenerationMode GetGenerationMode() const { return MeshGenerationMode; }
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Voxel | Debug")
