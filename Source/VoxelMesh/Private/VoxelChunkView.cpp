@@ -2,6 +2,7 @@
 
 
 #include "VoxelChunkView.h"
+#include "VoxelMeshLog.h"
 
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
@@ -12,6 +13,7 @@
 #include "VoxelUtilities.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "nanovdb/io/IO.h"
+#include "VoxelMeshLog.h"
 
 DECLARE_GPU_STAT_NAMED(FVoxelMeshGeneration, TEXT("Voxel.Mesh.Generation"));
 
@@ -216,17 +218,32 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
         TRefCountPtr<FRHIUnorderedAccessView> VertexIndexOffsetBufferUAV = nullptr;
         TRefCountPtr<FRHIShaderResourceView> VertexIndexOffsetBufferSRV = nullptr;
         
+        // Add initial estimate - realistic estimate is usually around 10-30% of total cubes
         uint32 EstimatedNonEmptyCubes = 0;
+        
+        // Add helper function to check if resources are valid
+        bool AreResourcesValid() const
+        {
+            return NonEmptyCubeLinearIdBuffer && NonEmptyCubeLinearIdBufferUAV && NonEmptyCubeLinearIdBufferSRV &&
+                   NonEmptyCubeIndexBuffer && NonEmptyCubeIndexBufferUAV && NonEmptyCubeIndexBufferSRV &&
+                   VertexIndexOffsetBuffer && VertexIndexOffsetBufferUAV && VertexIndexOffsetBufferSRV;
+        }
     };
     
-    // Estimate max resources needed for worst case (all cubes are non-empty)
+    // More realistic estimate: only allocate for ~25% of cubes initially, with min threshold
     FVoxelProcessingResources Resources;
-    Resources.EstimatedNonEmptyCubes = TotalCubes; // Worst case: all cubes are non-empty
+    Resources.EstimatedNonEmptyCubes = FMath::Max<uint32>(TotalCubes / 2u, 1024u); // 50% estimate with minimum size
     
-    // Create all buffer resources upfront with max size estimates
+    // Create all buffer resources upfront with more realistic size estimates
     FRHIResourceCreateInfo NonEmptyCubeLinearIdBufferInfo(TEXT("NonEmptyCube LinearId"));
     Resources.NonEmptyCubeLinearIdBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * Resources.EstimatedNonEmptyCubes, 
         EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, NonEmptyCubeLinearIdBufferInfo);
+    if (!Resources.NonEmptyCubeLinearIdBuffer)
+    {
+        UE_LOG(LogVoxelMesh, Error, TEXT("Failed to create NonEmptyCubeLinearIdBuffer"));
+        bIsReady.store(true, std::memory_order_release);
+        return;
+    }
     Resources.NonEmptyCubeLinearIdBufferSRV = RHICmdList.CreateShaderResourceView(Resources.NonEmptyCubeLinearIdBuffer, 
         FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
     Resources.NonEmptyCubeLinearIdBufferUAV = RHICmdList.CreateUnorderedAccessView(Resources.NonEmptyCubeLinearIdBuffer, 
@@ -235,6 +252,12 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
     FRHIResourceCreateInfo NonEmptyCubeIndexBufferInfo(TEXT("NonEmptyCube CubeIndex"));
     Resources.NonEmptyCubeIndexBuffer = RHICmdList.CreateBuffer(sizeof(uint32) * Resources.EstimatedNonEmptyCubes, 
         EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, NonEmptyCubeIndexBufferInfo);
+    if (!Resources.NonEmptyCubeIndexBuffer)
+    {
+        UE_LOG(LogVoxelMesh, Error, TEXT("Failed to create NonEmptyCubeIndexBuffer"));
+        bIsReady.store(true, std::memory_order_release);
+        return;
+    }
     Resources.NonEmptyCubeIndexBufferSRV = RHICmdList.CreateShaderResourceView(Resources.NonEmptyCubeIndexBuffer, 
         FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32_UINT));
     Resources.NonEmptyCubeIndexBufferUAV = RHICmdList.CreateUnorderedAccessView(Resources.NonEmptyCubeIndexBuffer, 
@@ -243,16 +266,30 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
     FRHIResourceCreateInfo VertexIndexOffsetBufferInfo(TEXT("Vertex Index Offsets"));
     Resources.VertexIndexOffsetBuffer = RHICmdList.CreateBuffer(2 * sizeof(uint32) * Resources.EstimatedNonEmptyCubes, 
         EBufferUsageFlags::Static | EBufferUsageFlags::ShaderResource | EBufferUsageFlags::UnorderedAccess, 0, ERHIAccess::UAVMask, VertexIndexOffsetBufferInfo);
+    if (!Resources.VertexIndexOffsetBuffer)
+    {
+        UE_LOG(LogVoxelMesh, Error, TEXT("Failed to create VertexIndexOffsetBuffer"));
+        bIsReady.store(true, std::memory_order_release);
+        return;
+    }
     Resources.VertexIndexOffsetBufferSRV = RHICmdList.CreateShaderResourceView(Resources.VertexIndexOffsetBuffer, 
         FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32G32_UINT));
     Resources.VertexIndexOffsetBufferUAV = RHICmdList.CreateUnorderedAccessView(Resources.VertexIndexOffsetBuffer, 
         FRHIViewDesc::CreateBufferUAV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(EPixelFormat::PF_R32G32_UINT));
-
-    // Also estimate vertex and index buffers for worst case
-    const uint32 EstimatedMaxVertices = TotalCubes * 12; // Worst case: 12 vertices per cube
-    const uint32 EstimatedMaxIndices = TotalCubes * 15 * 3; // Worst case: 15 triangles per cube
-    
-    ResizeBuffer_RenderThread(EstimatedMaxVertices * sizeof(FVector4f), EstimatedMaxIndices * sizeof(uint32));
+        
+    // Final validation check
+    if (!Resources.AreResourcesValid())
+    {
+        UE_LOG(LogVoxelMesh, Error, TEXT("Failed to create one or more resources for Marching Cubes algorithm"));
+        bIsReady.store(true, std::memory_order_release);
+        return;
+    }
+	
+	// Also estimate vertex and index buffers for worst case
+	const uint32 EstimatedMaxVertices = TotalCubes * 12; // Worst case: 12 vertices per cube
+	const uint32 EstimatedMaxIndices = TotalCubes * 15 * 3; // Worst case: 15 triangles per cube
+	
+	ResizeBuffer_RenderThread(EstimatedMaxVertices * sizeof(FVector4f), EstimatedMaxIndices * sizeof(uint32));
 
     // Step 1: Calculate cube indices (with async continuation)
     auto CalcCubeIndexCSRef = ShaderMap->GetShader<FVoxelMarchingCubesCalcCubeIndexCS>();
