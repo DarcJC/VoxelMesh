@@ -14,7 +14,9 @@
 #endif
 
 BEGIN_UNIFORM_BUFFER_STRUCT(FVoxelMarchingCubeUniformParameters, VOXELMESH_API )
-	SHADER_PARAMETER(uint32, VoxelSize)
+	SHADER_PARAMETER(uint32, VoxelSizeX)
+	SHADER_PARAMETER(uint32, VoxelSizeY)
+	SHADER_PARAMETER(uint32, VoxelSizeZ)
 	SHADER_PARAMETER(uint32, TotalCubes)
 	SHADER_PARAMETER(float, SurfaceIsoValue)
 END_UNIFORM_BUFFER_STRUCT()

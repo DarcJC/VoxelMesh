@@ -119,7 +119,9 @@ TSharedPtr<FVoxelChunkViewRHIProxy> UVoxelChunkView::GetRHIProxy()
 
 FVoxelChunkViewRHIProxy::FVoxelChunkViewRHIProxy(const UVoxelChunkView* ChunkView)
 	: Parent(const_cast<UVoxelChunkView*>(ChunkView))
-	, VoxelSize(FMath::Max3(ChunkView->DimensionX, ChunkView->DimensionY, ChunkView->DimensionZ))
+	, VoxelSizeX(ChunkView->DimensionX)
+	, VoxelSizeY(ChunkView->DimensionY)
+	, VoxelSizeZ(ChunkView->DimensionZ)
 	, SurfaceIsoValue(ChunkView->SurfaceIsoValue)
 	, bIsReady(true)
 {
@@ -153,6 +155,14 @@ void FVoxelChunkViewRHIProxy::ResizeBuffer_RenderThread(uint32_t NewVBSize, uint
 
 #define VOXELMESH_ENABLE_COMPUTE_DEBUG 0
 
+static TAutoConsoleVariable<int32> CVarVoxelMeshGenerationComputeDebug(
+	TEXT("voxel.MeshGenerationComputeDebug"),
+	0,
+	TEXT("Enable voxel mesh debug mode\n")
+	TEXT("0: off\n")
+	TEXT("1: on\n"),
+	ECVF_RenderThreadSafe);
+
 void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmediate& RHICmdList)
 {
     if (bool Expected = true; !bIsReady.compare_exchange_strong(Expected, false))
@@ -165,12 +175,14 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
     FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
     check(ShaderMap);
 
-    const size_t TotalCubes = VoxelSize * VoxelSize * VoxelSize;
+    // Calculate the total number of cubes using all three dimensions
+    const size_t TotalCubes = VoxelSizeX * VoxelSizeY * VoxelSizeZ;
 
-#if VOXELMESH_ENABLE_COMPUTE_DEBUG
     // RenderDoc Capture
-    IRenderCaptureProvider::Get().BeginCapture(&RHICmdList, 0);
-#endif
+	if (CVarVoxelMeshGenerationComputeDebug->GetBool())
+	{
+		IRenderCaptureProvider::Get().BeginCapture(&RHICmdList, 0);
+	}
     
     // Atomic counter buffer
     static constexpr uint32 DEFAULT_COUNTER_VALUES[] { 0, 0, 0, 0 };
@@ -183,7 +195,9 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
 
     // Uniform buffer
     FVoxelMarchingCubeUniformParameters UniformParameters;
-    UniformParameters.VoxelSize = VoxelSize;
+    UniformParameters.VoxelSizeX = VoxelSizeX;
+    UniformParameters.VoxelSizeY = VoxelSizeY;
+    UniformParameters.VoxelSizeZ = VoxelSizeZ;
     UniformParameters.SurfaceIsoValue = SurfaceIsoValue;
     UniformParameters.TotalCubes = TotalCubes;
     TUniformBufferRef<FVoxelMarchingCubeUniformParameters> UniformParametersBuffer = CreateUniformBufferImmediate(UniformParameters, UniformBuffer_SingleFrame);
@@ -354,10 +368,11 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmedia
         bIsReady.store(true, std::memory_order_release);
     });
 
-#if VOXELMESH_ENABLE_COMPUTE_DEBUG
     // End RenderDoc Capture
-    IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
-#endif
+	if (CVarVoxelMeshGenerationComputeDebug->GetBool())
+	{
+		IRenderCaptureProvider::Get().EndCapture(&RHICmdList);
+	}
 }
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh_GameThread()

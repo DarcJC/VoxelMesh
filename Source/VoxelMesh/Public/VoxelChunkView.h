@@ -98,7 +98,12 @@ struct FVoxelChunkViewRHIProxy
 	TRefCountPtr<FRHIUnorderedAccessView> MeshVertexBufferUAV;
 	TRefCountPtr<FRHIUnorderedAccessView> MeshIndexBufferUAV;
 	TArray<uint8> VoxelDataBuffer;
-	uint32 VoxelSize;
+	
+	// 替换单一的VoxelSize为三个独立的维度
+	uint32 VoxelSizeX;
+	uint32 VoxelSizeY;
+	uint32 VoxelSizeZ;
+	
 	float SurfaceIsoValue = 0.0f;
 	std::atomic<bool> bIsReady;
 };

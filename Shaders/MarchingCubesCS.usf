@@ -5,7 +5,7 @@
 #include "VoxelVDBCommons.ush"
 
 /**
- * Thanks 龚大.
+ * Thanks to 龚大.
  * https://github.com/gongminmin/AIHoloImager/tree/main
  */
 
@@ -15,8 +15,10 @@
 
 cbuffer MarchingCubeParameters
 {
-	/// Assume dimension X, Y, Z is the same as VoxelSize
-	uint VoxelSize;
+	/// Voxel grid dimensions for each axis
+	uint VoxelSizeX;
+	uint VoxelSizeY;
+	uint VoxelSizeZ;
 
 	/// Total number of cubes
 	uint TotalCubes;
@@ -34,14 +36,15 @@ pnanovdb_buf_t SrcVoxelData;
 /// =================================
 /// Stride = 4 * sizeof(float)
 RWBuffer<float4> OutVertexBuffer;
+
 /// Index Buffer Layout
 /// ============================
 /// | uint32 | uint32 | uint32 |
 /// ============================
 RWBuffer<uint> OutIndexBuffer;
 
-/// Atomic counter
-/// Size >= 3
+/// Atomic counter buffer
+/// Size must be >= 3 for tracking multiple counters
 RWBuffer<uint> Counter;
 
 /// Cube index offset of specified ThreadID.x
@@ -58,7 +61,7 @@ Buffer<uint> InNonEmptyCubeLinearId;
 RWBuffer<uint> OutNonEmptyCubeIndex;
 Buffer<uint> InNonEmptyCubeIndex;
 
-/// Indicate the base address when write to VBO/IBO.
+/// Indicate the base address when writing to VBO/IBO.
 RWBuffer<uint2> OutVertexIndexOffset;
 Buffer<uint2> InVertexIndexOffset;
 
@@ -77,21 +80,21 @@ inline uint GetIndexByPoint(uint3 Point)
 
 inline uint3 GetIndexSpaceCoordByLinearId(uint Index)
 {
-	const uint SizeXY = floor(Index / VoxelSize);
-	const uint IndexZ = Index - (SizeXY * VoxelSize); // Rest i of the cube volume
-	const uint IndexX = floor(SizeXY / VoxelSize);
-	const uint IndexY = SizeXY - (IndexX * VoxelSize);
-	return uint3(IndexX, IndexY, IndexZ);
+	uint Z = Index % VoxelSizeZ;
+	uint XY = Index / VoxelSizeZ;
+	uint Y = XY % VoxelSizeY;
+	uint X = XY / VoxelSizeY;
+	return uint3(X, Y, Z);
 }
 
 uint GetLinearIdByIndexSpaceCoord(uint3 Coord)
 {
-    return Coord.z + VoxelSize * (Coord.y + VoxelSize * Coord.x);
+    return Coord.z + VoxelSizeZ * (Coord.y + VoxelSizeY * Coord.x);
 }
 
 inline uint3 SafeIndexCoord(uint3 IndexSpaceCoord)
 {
-	return min(IndexSpaceCoord, VoxelSize - 1);
+	return min(IndexSpaceCoord, uint3(VoxelSizeX - 1, VoxelSizeY - 1, VoxelSizeZ - 1));
 }
 
 inline float SampleVoxelPoint(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
@@ -102,7 +105,7 @@ inline float SampleVoxelPoint(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sam
 FVoxelVdbValueWithGradient SampleVoxelPointWithGradientSafe(uint3 IndexSpaceCoord, in out FVoxelVdbSampler Sampler)
 {
 	uint3 IndexPrevious = max(IndexSpaceCoord, 1) - 1;
-	uint3 IndexNext = min(IndexSpaceCoord + 1, float3(VoxelSize, VoxelSize, VoxelSize) - 1);
+	uint3 IndexNext = min(IndexSpaceCoord + 1, uint3(VoxelSizeX, VoxelSizeY, VoxelSizeZ) - 1);
 	uint3 Index = IndexSpaceCoord;
 
 	FVoxelVdbValueWithGradient Result;
@@ -231,10 +234,10 @@ void CalcVertexAndIndexPrefixSumCS(uint3 ThreadID: SV_DispatchThreadID)
 	uint CubeIndex = CalcCubeIndex(Coord, Sampler);
 	OutNonEmptyCubeIndex[CubeOffset] = CubeIndex;
 
-	// Calc there is how many indices in current cube
+	// Calculate how many indices are in the current cube
 	const uint NumIndices = TriangleNumTable[CubeIndex] * 3;
 
-	// How many vertices will be produced in this cube
+	// Calculate how many vertices will be produced in this cube
 	uint Edges = EdgeTable[CubeIndex];
 	uint NumVertices = 0;
 	BRANCH if (Edges != 0)
@@ -357,8 +360,8 @@ void MarchingCubeMeshGenerationCS(uint3 ThreadID: SV_DispatchThreadID)
 			const float BeginPointValue = SampleVoxelPoint(BeginCoord, Sampler);
 			const float EndPointValue = SampleVoxelPoint(EndCoord, Sampler);
 			const float3 VertexPosition = InterpolateVertex(BeginCoord, EndCoord, BeginPointValue, EndPointValue);
-			// TODO(darc): Calc normal using gradient
-			OutVertexBuffer[VertexOffset] = float4( (VertexPosition / (VoxelSize - 1.f)) - 0.5f, 0.0f);
+			 // Normalize using respective dimensions
+			OutVertexBuffer[VertexOffset] = float4((VertexPosition / float3(VoxelSizeX - 1, VoxelSizeY - 1, VoxelSizeZ - 1)) - 0.5f, 0.0f);
 			++VertexOffset;
 		}
 	}
