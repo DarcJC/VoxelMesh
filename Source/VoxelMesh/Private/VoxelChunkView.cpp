@@ -554,6 +554,15 @@ void FVoxelChunkViewRHIProxy::RegenerateMeshAsyncCompute_RenderThread(FRHIAsyncC
 		return;
 	}
 
+	// Safety check for mesh buffers
+	if (!MeshVertexBufferUAV || !MeshIndexBufferUAV)
+	{
+		UE_LOG(LogVoxelMesh, Error, TEXT("Mesh buffers not initialized, cannot generate mesh"));
+		bIsReady.store(true, std::memory_order_release);
+		bIsAsyncGenerating.store(false, std::memory_order_release);
+		return;
+	}
+
 	// Calculate dimensions and total cubes
 	const uint64 TotalCubes = static_cast<uint64>(VoxelSizeX - 1) * static_cast<uint64>(VoxelSizeY - 1) * static_cast<uint64>(VoxelSizeZ - 1);
 	
