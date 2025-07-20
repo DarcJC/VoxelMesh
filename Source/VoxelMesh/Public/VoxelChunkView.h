@@ -18,6 +18,31 @@ struct FVoxelChunkViewRHIProxy;
 
 DECLARE_MULTICAST_DELEGATE(FVoxelChunkMeshBuildFinishedDelegate);
 
+// Forward declare processing resources struct
+struct FVoxelProcessingResources
+{
+	TRefCountPtr<FRHIBuffer> NonEmptyCubeLinearIdBuffer = nullptr;
+	TRefCountPtr<FRHIUnorderedAccessView> NonEmptyCubeLinearIdBufferUAV = nullptr;
+	TRefCountPtr<FRHIShaderResourceView> NonEmptyCubeLinearIdBufferSRV = nullptr;
+	
+	TRefCountPtr<FRHIBuffer> NonEmptyCubeIndexBuffer = nullptr;
+	TRefCountPtr<FRHIUnorderedAccessView> NonEmptyCubeIndexBufferUAV = nullptr;
+	TRefCountPtr<FRHIShaderResourceView> NonEmptyCubeIndexBufferSRV = nullptr;
+	
+	TRefCountPtr<FRHIBuffer> VertexIndexOffsetBuffer = nullptr;
+	TRefCountPtr<FRHIUnorderedAccessView> VertexIndexOffsetBufferUAV = nullptr;
+	TRefCountPtr<FRHIShaderResourceView> VertexIndexOffsetBufferSRV = nullptr;
+	
+	uint32 EstimatedNonEmptyCubes = 0;
+	
+	bool AreResourcesValid() const
+	{
+		return NonEmptyCubeLinearIdBuffer && NonEmptyCubeLinearIdBufferUAV && NonEmptyCubeLinearIdBufferSRV &&
+			   NonEmptyCubeIndexBuffer && NonEmptyCubeIndexBufferUAV && NonEmptyCubeIndexBufferSRV &&
+			   VertexIndexOffsetBuffer && VertexIndexOffsetBufferUAV && VertexIndexOffsetBufferSRV;
+	}
+};
+
 // Mesh generation modes
 UENUM(BlueprintType)
 enum class EVoxelMeshGenerationMode : uint8
@@ -48,6 +73,14 @@ public:
 
 	UFUNCTION(BlueprintCallable)
 	void RebuildMesh();
+
+	/** Force use of async compute for mesh generation (for testing) */
+	UFUNCTION(BlueprintCallable, Category = "Voxel|Debug")
+	void RebuildMeshAsync();
+
+	/** Force use of synchronous compute for mesh generation (for testing) */
+	UFUNCTION(BlueprintCallable, Category = "Voxel|Debug")  
+	void RebuildMeshSync();
 
 	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
 
@@ -108,6 +141,16 @@ struct FVoxelChunkViewRHIProxy
 	void RegenerateMesh_GameThread();
 	void RegenerateMesh();
 
+	// New async compute methods
+	void RegenerateMeshAsync_GameThread();
+	void RegenerateMeshAsync_RenderThread();
+	void RegenerateMeshAsyncCompute_RenderThread(FRHIAsyncComputeCommandListImmediate& AsyncComputeCmdList);
+	void FinalizeMeshGenerationAsync(FRHIAsyncComputeCommandListImmediate& AsyncComputeCmdList, uint32 NumNonEmptyCubes, 
+		const FVoxelProcessingResources& Resources, 
+		TUniformBufferRef<FVoxelMarchingCubeUniformParameters> UniformParametersBuffer,
+		FShaderResourceViewRHIRef GridBufferSRV,
+		FShaderResourceViewRHIRef CubeIndexOffsetBufferSRV);
+
 	bool IsReady() const;
 	bool IsGenerating() const;
 
@@ -125,5 +168,12 @@ struct FVoxelChunkViewRHIProxy
 	
 	float SurfaceIsoValue = 0.0f;
 	std::atomic<bool> bIsReady;
+
+	// Async compute state management
+	std::atomic<bool> bIsAsyncGenerating{false};
+	TRefCountPtr<FRHIGPUFence> AsyncComputeFence;
+	
+	// Performance tracking
+	double AsyncStartTime = 0.0;
 };
 

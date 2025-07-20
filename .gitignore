@@ -3,3 +3,6 @@
 .vs
 Binaries
 Intermediate
+
+# Development/testing tools
+validate_async_compute.sh
