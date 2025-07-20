@@ -74,6 +74,14 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void RebuildMesh();
 
+	/** Force use of async compute for mesh generation (for testing) */
+	UFUNCTION(BlueprintCallable, Category = "Voxel|Debug")
+	void RebuildMeshAsync();
+
+	/** Force use of synchronous compute for mesh generation (for testing) */
+	UFUNCTION(BlueprintCallable, Category = "Voxel|Debug")  
+	void RebuildMeshSync();
+
 	TSharedPtr<FVoxelChunkViewRHIProxy> GetRHIProxy();
 
 	void MarkAsDirty();
@@ -164,5 +172,8 @@ struct FVoxelChunkViewRHIProxy
 	// Async compute state management
 	std::atomic<bool> bIsAsyncGenerating{false};
 	TRefCountPtr<FRHIGPUFence> AsyncComputeFence;
+	
+	// Performance tracking
+	double AsyncStartTime = 0.0;
 };
 

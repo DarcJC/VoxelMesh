@@ -112,6 +112,24 @@ void UVoxelChunkView::RebuildMesh()
 	GetRHIProxy()->RegenerateMesh();
 }
 
+void UVoxelChunkView::RebuildMeshAsync()
+{
+	if (auto Proxy = GetRHIProxy())
+	{
+		UE_LOG(LogVoxelMesh, Log, TEXT("Force rebuilding mesh using async compute"));
+		Proxy->RegenerateMeshAsync_GameThread();
+	}
+}
+
+void UVoxelChunkView::RebuildMeshSync()
+{
+	if (auto Proxy = GetRHIProxy())
+	{
+		UE_LOG(LogVoxelMesh, Log, TEXT("Force rebuilding mesh using synchronous compute"));
+		Proxy->RegenerateMesh_GameThread();
+	}
+}
+
 TSharedPtr<FVoxelChunkViewRHIProxy> UVoxelChunkView::GetRHIProxy()
 {
 	return RHIProxy;
@@ -161,6 +179,14 @@ static TAutoConsoleVariable<int32> CVarVoxelMeshGenerationComputeDebug(
 	TEXT("Enable voxel mesh debug mode\n")
 	TEXT("0: off\n")
 	TEXT("1: on\n"),
+	ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarVoxelMeshUseAsyncCompute(
+	TEXT("voxel.UseAsyncCompute"),
+	1,
+	TEXT("Use async compute for voxel mesh generation\n")
+	TEXT("0: Use synchronous compute (fallback)\n")
+	TEXT("1: Use async compute when supported (default)\n"),
 	ECVF_RenderThreadSafe);
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh_RenderThread(FRHICommandListImmediate& RHICmdList)
@@ -427,8 +453,24 @@ void FVoxelChunkViewRHIProxy::RegenerateMesh_GameThread()
 
 void FVoxelChunkViewRHIProxy::RegenerateMesh()
 {
-	// Use async compute by default for better performance
-	RegenerateMeshAsync_GameThread();
+	// Check if async compute is enabled and supported
+	const bool bAsyncComputeEnabled = CVarVoxelMeshUseAsyncCompute.GetValueOnAnyThread() != 0;
+	const bool bAsyncComputeSupported = GRHISupportsAsyncCompute && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5;
+	
+	if (bAsyncComputeEnabled && bAsyncComputeSupported)
+	{
+		// Use async compute for better performance
+		RegenerateMeshAsync_GameThread();
+	}
+	else
+	{
+		// Fall back to synchronous rendering
+		if (bAsyncComputeEnabled && !bAsyncComputeSupported)
+		{
+			UE_LOG(LogVoxelMesh, Warning, TEXT("Async compute requested but not supported, falling back to synchronous mesh generation"));
+		}
+		RegenerateMesh_GameThread();
+	}
 }
 
 bool FVoxelChunkViewRHIProxy::IsReady() const
@@ -443,14 +485,24 @@ bool FVoxelChunkViewRHIProxy::IsGenerating() const
 
 void FVoxelChunkViewRHIProxy::RegenerateMeshAsync_GameThread()
 {
+	// Prevent concurrent async generation attempts
+	if (bIsAsyncGenerating.load(std::memory_order_acquire))
+	{
+		UE_LOG(LogVoxelMesh, Warning, TEXT("Async mesh generation already in progress, ignoring new request"));
+		return;
+	}
+
 	if (IsValid(Parent))
 	{
 		SurfaceIsoValue = Parent->SurfaceIsoValue;
 	}
 	
-	// Mark as generating before starting async work
-	bIsAsyncGenerating.store(true, std::memory_order_release);
+	// Record start time for performance tracking
+	AsyncStartTime = FPlatformTime::Seconds();
+	
+	// Mark as not ready and generating (atomic operations)
 	bIsReady.store(false, std::memory_order_release);
+	bIsAsyncGenerating.store(true, std::memory_order_release);
 	
 	ENQUEUE_RENDER_COMMAND(VoxelMeshMarchingCubesAsync)([this](FRHICommandListImmediate& RHICmdList)
 	{
@@ -469,6 +521,13 @@ void FVoxelChunkViewRHIProxy::RegenerateMeshAsync_RenderThread()
 
 void FVoxelChunkViewRHIProxy::RegenerateMeshAsyncCompute_RenderThread(FRHIAsyncComputeCommandListImmediate& AsyncComputeCmdList)
 {
+	// Verify we're still in generating state (defensive check)
+	if (!bIsAsyncGenerating.load(std::memory_order_acquire))
+	{
+		UE_LOG(LogVoxelMesh, Warning, TEXT("Async mesh generation was cancelled before render thread execution"));
+		return;
+	}
+
 	// Get shader map
 	const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	if (!ShaderMap)
@@ -754,6 +813,15 @@ void FVoxelChunkViewRHIProxy::FinalizeMeshGenerationAsync(FRHIAsyncComputeComman
 			AsyncComputeFence->Wait();
 		}
 		
+		// Verify that mesh buffers are valid
+		if (!MeshVertexBuffer || !MeshIndexBuffer)
+		{
+			UE_LOG(LogVoxelMesh, Error, TEXT("Async mesh generation completed but buffers are invalid"));
+			bIsReady.store(false, std::memory_order_release);
+			bIsAsyncGenerating.store(false, std::memory_order_release);
+			return;
+		}
+		
 		// Notify that mesh is ready
 		if (const UVoxelChunkView* VoxelChunkView = Parent.Get())
 		{
@@ -764,6 +832,8 @@ void FVoxelChunkViewRHIProxy::FinalizeMeshGenerationAsync(FRHIAsyncComputeComman
 		bIsReady.store(true, std::memory_order_release);
 		bIsAsyncGenerating.store(false, std::memory_order_release);
 		
-		UE_LOG(LogVoxelMesh, Log, TEXT("Async voxel mesh generation completed"));
+		// Log performance information
+		const double GenerationTime = FPlatformTime::Seconds() - AsyncStartTime;
+		UE_LOG(LogVoxelMesh, Log, TEXT("Async voxel mesh generation completed in %.2f ms"), GenerationTime * 1000.0);
 	});
 }
